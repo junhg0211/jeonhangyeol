@@ -1,11 +1,53 @@
+.DS_Store
+Thumbs.db
+
+# Virtual environments
 .venv/
+venv/
+env/
+
+# Python cache and compiled files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.hypothesis/
+
+# Coverage reports
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+site/
+*.egg-info/
+pip-wheel-metadata/
+
+# Databases
 *.sqlite3
 *.db
 data.sqlite3
-.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+.python-version
+.secret
+*.pem
+*.key
 bot_token.txt
 
+# IDE/editor
+.idea/
+.vscode/
+
+# Logs
+*.log

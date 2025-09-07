@@ -9,6 +9,8 @@ class Economy(commands.Cog):
         self.bot = bot
         self.user_balances = {}
 
+    # 앱 커맨드는 Cog에 정의되면 자동으로 트리에 등록됩니다.
+
     def get_balance(self, user_id: int) -> int:
         return self.user_balances.setdefault(user_id, 1000)
 
@@ -83,4 +85,3 @@ class Economy(commands.Cog):
 # 봇에 이 cog를 추가하기 위한 필수 함수
 async def setup(bot: commands.Bot):
     await bot.add_cog(Economy(bot))
-

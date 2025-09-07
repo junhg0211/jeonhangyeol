@@ -290,3 +290,44 @@ def list_inventory(user_id: int, query: str | None = None) -> list[tuple[str, st
                 (user_id,),
             )
         return [(str(emoji), str(name), int(qty)) for (emoji, name, qty) in cur.fetchall()]
+
+
+def discard_item(user_id: int, name: str, emoji: str, qty: int = 1) -> int:
+    """Discard `qty` of an item from user's inventory. Returns remaining qty.
+
+    Raises ValueError if item not found or insufficient quantity.
+    """
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "SELECT id FROM items WHERE name=? AND emoji=?",
+            (name.strip(), emoji.strip()),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Item not found")
+        item_id = int(row[0])
+
+        cur = conn.execute(
+            "SELECT qty FROM inventory WHERE user_id=? AND item_id=?",
+            (user_id, item_id),
+        )
+        row = cur.fetchone()
+        current = int(row[0]) if row else 0
+        if current < qty:
+            raise ValueError("Insufficient item quantity")
+
+        new_qty = current - qty
+        if new_qty == 0:
+            conn.execute(
+                "DELETE FROM inventory WHERE user_id=? AND item_id=?",
+                (user_id, item_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE inventory SET qty=? WHERE user_id=? AND item_id=?",
+                (new_qty, user_id, item_id),
+            )
+        return new_qty

@@ -127,6 +127,40 @@ class Inventory(commands.Cog):
         embed.set_footer(text=f"보유수량: 보낸사람 {sender_qty}개 / 받은사람 {receiver_qty}개")
         await interaction.followup.send(embed=embed)
 
+    # 4) 아이템 폐기: /폐기 이모지 이름 [수량]
+    @app_commands.command(name="폐기", description="인벤토리에서 아이템을 버립니다.")
+    @app_commands.describe(
+        이모지="아이템 이모지",
+        이름="아이템 이름",
+        수량="버릴 수량 (기본 1)"
+    )
+    async def discard(
+        self,
+        interaction: discord.Interaction,
+        이모지: str,
+        이름: str,
+        수량: int = 1,
+    ):
+        if 수량 <= 0:
+            await interaction.response.send_message("수량은 0보다 커야 합니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            remaining = db.discard_item(interaction.user.id, 이름, 이모지, 수량)
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🗑️ 아이템 폐기 완료",
+            description=f"{이모지} {이름} × **{수량}** 을(를) 버렸습니다.",
+            color=discord.Color.red(),
+        )
+        embed.set_footer(text=f"현재 보유 수량: {remaining}개")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # 3) 테스트/운영용 아이템 지급: /지급 대상 이모지 이름 [수량]
     @app_commands.command(name="지급", description="관리자 전용: 특정 유저에게 아이템을 지급합니다.")
     @app_commands.describe(

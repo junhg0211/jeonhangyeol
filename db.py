@@ -156,6 +156,25 @@ def get_rank(user_id: int) -> tuple[int, int, int]:
         return rank, balance, total
 
 
+def count_users() -> int:
+    """Return total number of users with a balance row."""
+    with get_conn() as conn:
+        cur = conn.execute("SELECT COUNT(*) FROM balances")
+        return int(cur.fetchone()[0])
+
+
+def rank_page(offset: int, limit: int) -> list[tuple[int, int]]:
+    """Return a page of (user_id, balance) ordered by balance desc then user_id asc."""
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 50))
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT user_id, balance FROM balances ORDER BY balance DESC, user_id ASC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        return [(int(uid), int(bal)) for uid, bal in cur.fetchall()]
+
+
 # ----------------------
 # Inventory / Items APIs
 # ----------------------

@@ -4,12 +4,16 @@ import discord
 from discord import app_commands  # app_commands를 import 합니다.
 from discord.ext import commands
 import db
+import asyncio
+import time
 
 class Economy(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # Ensure DB is ready on cog init
         db.init_db()
+        # message_id -> pagination context for ranking
+        self._rank_pages: dict[int, dict] = {}
 
     # 앱 커맨드는 Cog에 정의되면 자동으로 트리에 등록됩니다.
 
@@ -81,38 +85,163 @@ class Economy(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     # 3. 랭킹: /돈 순위 [상위]
-    @money.command(name="순위", description="소지금 상위 랭킹을 확인합니다.")
-    @app_commands.describe(상위="표시할 인원 수 (기본 10, 최대 50)")
+    @money.command(name="순위", description="소지금 상위 랭킹을 확인합니다(페이지 지원).")
+    @app_commands.describe(상위="페이지당 표시 인원 (기본 10, 최대 25)")
     async def money_rank(self, interaction: discord.Interaction, 상위: int = 10):
-        # 값 검증 및 상한 적용
-        top_n = max(1, min(int(상위), 50))
+        per_page = max(1, min(int(상위), 25))
 
-        await interaction.response.defer()
+        # 첫 페이지 계산
+        total = db.count_users()
+        total_pages = max(1, (total + per_page - 1) // per_page)
 
-        rows = db.top_balances(top_n)
+        def build_embed(page: int) -> discord.Embed:
+            offset = (page - 1) * per_page
+            rows = db.rank_page(offset, per_page)
+            lines = []
+            for i, (uid, bal) in enumerate(rows, start=1):
+                member = None
+                if interaction.guild:
+                    member = interaction.guild.get_member(uid)
+                user = member or interaction.client.get_user(uid)
+                name = (
+                    member.display_name if member
+                    else (user.name if isinstance(user, discord.User) else f"<@{uid}>")
+                )
+                lines.append(f"**{offset + i}.** {name} — **{bal:,}원**")
 
-        # 유저명 해석
+            rank, my_balance, _ = db.get_rank(interaction.user.id)
+            embed = discord.Embed(
+                title="🏆 소지금 순위",
+                description="\n".join(lines) if lines else "데이터가 없습니다.",
+                color=discord.Color.purple(),
+            )
+            footer = f"당신의 순위: {rank} (보유 {my_balance:,}원) • 페이지 {page}/{total_pages} • ⬅️ ➡️ • 1분 후 만료"
+            embed.set_footer(text=footer)
+            return embed
+
+        await interaction.response.send_message(embed=build_embed(1))
+        msg = await interaction.original_response()
+
+        if total == 0:
+            return
+
+        # 컨텍스트 저장
+        self._rank_pages[msg.id] = {
+            "owner_id": interaction.user.id,
+            "per_page": per_page,
+            "page": 1,
+            "total_pages": total_pages,
+            "expires_at": time.monotonic() + 60,
+        }
+
+        # 반응 추가
+        for emoji in ("⬅️", "➡️"):
+            try:
+                await msg.add_reaction(emoji)
+            except Exception:
+                pass
+
+        # 만료 스케줄링
+        asyncio.create_task(self._expire_rank_message(msg))
+
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
+        if user.bot:
+            return
+        msg = reaction.message
+        ctx = self._rank_pages.get(msg.id)
+        if not ctx:
+            return
+        # 소유자만 조작 가능
+        if user.id != ctx["owner_id"]:
+            return
+
+        # 만료 확인
+        if time.monotonic() > ctx.get("expires_at", 0):
+            try:
+                await msg.clear_reactions()
+            except Exception:
+                pass
+            self._rank_pages.pop(msg.id, None)
+            return
+
+        emoji = str(reaction.emoji)
+        page = ctx["page"]
+        total_pages = ctx["total_pages"]
+        if emoji == "⬅️" and page > 1:
+            page -= 1
+        elif emoji == "➡️" and page < total_pages:
+            page += 1
+        else:
+            return
+
+        ctx["page"] = page
+        per_page = ctx["per_page"]
+
+        # embed 재구성
+        total = db.count_users()
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        ctx["total_pages"] = total_pages
+
+        def build_embed(page: int) -> discord.Embed:
+            offset = (page - 1) * per_page
+            rows = db.rank_page(offset, per_page)
+            lines = []
+            for i, (uid, bal) in enumerate(rows, start=1):
+                member = msg.guild.get_member(uid) if msg.guild else None
+                user_obj = member or self.bot.get_user(uid)
+                name = (
+                    member.display_name if member
+                    else (user_obj.name if isinstance(user_obj, discord.User) else f"<@{uid}>")
+                )
+                lines.append(f"**{offset + i}.** {name} — **{bal:,}원**")
+            rank, my_balance, _ = db.get_rank(user.id)
+            embed = discord.Embed(title="🏆 소지금 순위", description="\n".join(lines) if lines else "데이터가 없습니다.", color=discord.Color.purple())
+            embed.set_footer(text=f"당신의 순위: {rank} (보유 {my_balance:,}원) • 페이지 {page}/{total_pages} • ⬅️ ➡️ • 1분 후 만료")
+            return embed
+
+        try:
+            await msg.edit(embed=build_embed(page))
+        except Exception:
+            pass
+        try:
+            await msg.remove_reaction(reaction.emoji, user)
+        except Exception:
+            pass
+
+    async def _expire_rank_message(self, msg: discord.Message):
+        await asyncio.sleep(60)
+        ctx = self._rank_pages.get(msg.id)
+        if not ctx:
+            return
+        # 현재 페이지 기준으로 임베드 만료 표기
+        page = ctx["page"]
+        per_page = ctx["per_page"]
+        total = db.count_users()
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        offset = (page - 1) * per_page
+        rows = db.rank_page(offset, per_page)
         lines = []
-        for idx, (uid, bal) in enumerate(rows, start=1):
-            user = interaction.client.get_user(uid) or (
-                interaction.guild.get_member(uid) if interaction.guild else None
+        for i, (uid, bal) in enumerate(rows, start=1):
+            member = msg.guild.get_member(uid) if msg.guild else None
+            user_obj = member or self.bot.get_user(uid)
+            name = (
+                member.display_name if member
+                else (user_obj.name if isinstance(user_obj, discord.User) else f"<@{uid}>")
             )
-            name = user.display_name if isinstance(user, discord.Member) else (
-                user.name if isinstance(user, discord.User) else f"<@{uid}>"
-            )
-            lines.append(f"**{idx}.** {name} — **{bal:,}원**")
-
-        # 호출자 개인 순위도 제공
-        rank, my_balance, total = db.get_rank(interaction.user.id)
-
-        embed = discord.Embed(
-            title="🏆 소지금 순위",
-            description="\n".join(lines) if lines else "데이터가 없습니다.",
-            color=discord.Color.purple()
-        )
-        embed.set_footer(text=f"당신의 순위: {rank}/{total} (보유 {my_balance:,}원)")
-
-        await interaction.followup.send(embed=embed)
+            lines.append(f"**{offset + i}.** {name} — **{bal:,}원**")
+        rank, my_balance, _ = db.get_rank(ctx["owner_id"])
+        embed = discord.Embed(title="🏆 소지금 순위", description="\n".join(lines) if lines else "데이터가 없습니다.", color=discord.Color.purple())
+        embed.set_footer(text=f"당신의 순위: {rank} (보유 {my_balance:,}원) • 페이지 {page}/{total_pages} • 만료됨")
+        try:
+            await msg.edit(embed=embed)
+        except Exception:
+            pass
+        try:
+            await msg.clear_reactions()
+        except Exception:
+            pass
+        self._rank_pages.pop(msg.id, None)
 
 # 봇에 이 cog를 추가하기 위한 필수 함수
 async def setup(bot: commands.Bot):

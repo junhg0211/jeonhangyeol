@@ -95,3 +95,39 @@ def transfer(sender_id: int, receiver_id: int, amount: int) -> tuple[int, int]:
 
         return new_sender, new_receiver
 
+
+def top_balances(limit: int = 10) -> list[tuple[int, int]]:
+    """Return list of (user_id, balance) ordered by balance desc.
+
+    Args:
+        limit: number of rows to return (1-50 safeguard)
+    """
+    limit = max(1, min(int(limit), 50))
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT user_id, balance FROM balances ORDER BY balance DESC, user_id ASC LIMIT ?",
+            (limit,),
+        )
+        return [(int(uid), int(bal)) for uid, bal in cur.fetchall()]
+
+
+def get_rank(user_id: int) -> tuple[int, int, int]:
+    """Return (rank, balance, total_users) for the given user_id.
+
+    If user does not exist, ensures creation and returns their default rank.
+    Rank is 1-based; ties share rank via dense ranking.
+    """
+    with get_conn() as conn:
+        # Ensure user exists
+        balance = _ensure_user(conn, user_id)
+
+        # Dense rank: count distinct balances greater than user's balance, then +1
+        cur = conn.execute(
+            "SELECT COUNT(DISTINCT balance) FROM balances WHERE balance > ?",
+            (balance,),
+        )
+        higher = int(cur.fetchone()[0])
+        cur = conn.execute("SELECT COUNT(*) FROM balances")
+        total = int(cur.fetchone()[0])
+        rank = higher + 1
+        return rank, balance, total

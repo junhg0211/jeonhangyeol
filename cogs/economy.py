@@ -20,22 +20,23 @@ class Economy(commands.Cog):
     async def on_ready(self):
         print("Economy cog가 준비되었습니다.")
 
-    # 1. 소지금 확인 슬래시 명령어
-    @app_commands.command(name="돈", description="자신의 소지금을 확인합니다.")
-    async def check_balance(self, interaction: discord.Interaction):
-        """자신의 소지금을 확인합니다."""
+    # "돈" 그룹 명령어 정의
+    money = app_commands.Group(name="돈", description="돈 관련 명령어")
+
+    # 1-a. 소지금 확인: /돈 확인
+    @money.command(name="확인", description="자신의 소지금을 확인합니다.")
+    async def money_check(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         balance = self.get_balance(user_id)
-        
+
         embed = discord.Embed(
             title=f"{interaction.user.display_name}님의 지갑",
             description=f"💰 현재 소지금: **{balance:,}원**",
             color=discord.Color.gold()
         )
-        # 슬래시 명령어는 interaction.response.send_message로 응답해야 합니다.
         await interaction.response.send_message(embed=embed)
 
-    # 2. 송금 슬래시 명령어
+    # 2. 송금 슬래시 명령어 (기존 그대로 유지)
     @app_commands.command(name="송금", description="다른 사람에게 돈을 보냅니다.")
     @app_commands.describe(
         받는사람="돈을 보낼 대상을 선택하세요.",
@@ -77,6 +78,40 @@ class Economy(commands.Cog):
             color=discord.Color.green()
         )
         # defer를 사용했으므로 followup.send로 후속 메시지를 보냅니다.
+        await interaction.followup.send(embed=embed)
+
+    # 3. 랭킹: /돈 순위 [상위]
+    @money.command(name="순위", description="소지금 상위 랭킹을 확인합니다.")
+    @app_commands.describe(상위="표시할 인원 수 (기본 10, 최대 50)")
+    async def money_rank(self, interaction: discord.Interaction, 상위: int = 10):
+        # 값 검증 및 상한 적용
+        top_n = max(1, min(int(상위), 50))
+
+        await interaction.response.defer()
+
+        rows = db.top_balances(top_n)
+
+        # 유저명 해석
+        lines = []
+        for idx, (uid, bal) in enumerate(rows, start=1):
+            user = interaction.client.get_user(uid) or (
+                interaction.guild.get_member(uid) if interaction.guild else None
+            )
+            name = user.display_name if isinstance(user, discord.Member) else (
+                user.name if isinstance(user, discord.User) else f"<@{uid}>"
+            )
+            lines.append(f"**{idx}.** {name} — **{bal:,}원**")
+
+        # 호출자 개인 순위도 제공
+        rank, my_balance, total = db.get_rank(interaction.user.id)
+
+        embed = discord.Embed(
+            title="🏆 소지금 순위",
+            description="\n".join(lines) if lines else "데이터가 없습니다.",
+            color=discord.Color.purple()
+        )
+        embed.set_footer(text=f"당신의 순위: {rank}/{total} (보유 {my_balance:,}원)")
+
         await interaction.followup.send(embed=embed)
 
 # 봇에 이 cog를 추가하기 위한 필수 함수

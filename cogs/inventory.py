@@ -90,8 +90,8 @@ class Inventory(commands.Cog):
         interaction: discord.Interaction,
         받는사람: discord.Member,
         아이템: str | None = None,
-        이모지: str,
-        이름: str,
+        이모지: str | None = None,
+        이름: str | None = None,
         수량: int = 1,
     ):
         # 기본 검증
@@ -157,8 +157,8 @@ class Inventory(commands.Cog):
         self,
         interaction: discord.Interaction,
         아이템: str | None = None,
-        이모지: str,
-        이름: str,
+        이모지: str | None = None,
+        이름: str | None = None,
         수량: int = 1,
     ):
         if 수량 <= 0:

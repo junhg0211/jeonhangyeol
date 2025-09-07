@@ -1,18 +1,20 @@
 # cogs/economy.py
 
 import discord
-from discord import app_commands # app_commands를 import 합니다.
+from discord import app_commands  # app_commands를 import 합니다.
 from discord.ext import commands
+import db
 
 class Economy(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.user_balances = {}
+        # Ensure DB is ready on cog init
+        db.init_db()
 
     # 앱 커맨드는 Cog에 정의되면 자동으로 트리에 등록됩니다.
 
     def get_balance(self, user_id: int) -> int:
-        return self.user_balances.setdefault(user_id, 1000)
+        return db.get_balance(user_id)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -62,17 +64,12 @@ class Economy(commands.Cog):
             await interaction.followup.send("봇에게는 돈을 보낼 수 없습니다. 🤖")
             return
 
-        sender_balance = self.get_balance(sender_id)
-
-        # 4. 보내는 사람의 잔액이 충분한지 확인
-        if sender_balance < 금액:
-            await interaction.followup.send(f"소지금이 부족합니다. (현재 소지금: {sender_balance:,}원)")
+        # 송금 진행 (SQLite, 원자적 트랜잭션)
+        try:
+            new_sender, new_receiver = db.transfer(sender_id, receiver_id, 금액)
+        except ValueError as e:
+            await interaction.followup.send(str(e))
             return
-
-        # 송금 진행
-        self.user_balances[sender_id] -= 금액
-        receiver_balance = self.get_balance(receiver_id) # 받는 사람의 잔액을 미리 가져옴
-        self.user_balances[receiver_id] += 금액
 
         embed = discord.Embed(
             title="💸 송금 완료",

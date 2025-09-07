@@ -3,6 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 
 import db
+import asyncio
+import time
 
 
 class Inventory(commands.Cog):
@@ -41,7 +43,7 @@ class Inventory(commands.Cog):
             if 검색:
                 title += f" — 검색: {검색}"
             embed = discord.Embed(title=title, description=desc, color=discord.Color.blurple())
-            embed.set_footer(text=f"페이지 {page}/{total_pages} • 반응으로 이동: ⬅️ ➡️ ⏹️")
+            embed.set_footer(text=f"페이지 {page}/{total_pages} • 반응으로 이동: ⬅️ ➡️ • 1분 후 만료")
             return embed
 
         await interaction.response.send_message(embed=page_embed(1))
@@ -60,14 +62,18 @@ class Inventory(commands.Cog):
             "page": 1,
             "total_pages": total_pages,
             "search": 검색 or "",
+            "expires_at": time.monotonic() + 60,
         }
 
         # 반응 추가 (권한 없을 수 있어 예외 무시)
-        for emoji in ("⬅️", "➡️", "⏹️"):
+        for emoji in ("⬅️", "➡️"):
             try:
                 await msg.add_reaction(emoji)
             except Exception:
                 pass
+
+        # 타임아웃 스케줄링 (1분)
+        asyncio.create_task(self._schedule_expire(msg))
 
     # 2) 아이템 양도: /양도 받는사람 이모지 이름 [수량]
     @app_commands.command(name="양도", description="아이템을 다른 사람에게 전달합니다.")
@@ -188,18 +194,20 @@ class Inventory(commands.Cog):
         page = ctx["page"]
         total_pages = ctx["total_pages"]
 
-        if emoji == "⬅️" and page > 1:
-            page -= 1
-        elif emoji == "➡️" and page < total_pages:
-            page += 1
-        elif emoji == "⏹️":
-            # 종료: 컨트롤 제거 및 컨텍스트 삭제 시도
+        # 만료 확인
+        if time.monotonic() > ctx.get("expires_at", 0):
+            # 만료된 경우 컨트롤 제거 시도 후 컨텍스트 삭제
             try:
                 await msg.clear_reactions()
             except Exception:
                 pass
             self._pages.pop(msg.id, None)
             return
+
+        if emoji == "⬅️" and page > 1:
+            page -= 1
+        elif emoji == "➡️" and page < total_pages:
+            page += 1
         else:
             # 무효 입력
             return
@@ -221,7 +229,7 @@ class Inventory(commands.Cog):
         if search:
             title += f" — 검색: {search}"
         embed = discord.Embed(title=title, description=desc, color=discord.Color.blurple())
-        embed.set_footer(text=f"페이지 {page}/{total_pages} • 반응으로 이동: ⬅️ ➡️ ⏹️")
+        embed.set_footer(text=f"페이지 {page}/{total_pages} • 반응으로 이동: ⬅️ ➡️ • 1분 후 만료")
         try:
             await msg.edit(embed=embed)
         except Exception:
@@ -231,6 +239,42 @@ class Inventory(commands.Cog):
             await msg.remove_reaction(reaction.emoji, user)
         except Exception:
             pass
+
+    async def _schedule_expire(self, msg: discord.Message):
+        # 1분 대기 후 컨트롤 비활성화
+        await asyncio.sleep(60)
+        ctx = self._pages.get(msg.id)
+        if not ctx:
+            return
+        # 임베드 업데이트(만료 표시)
+        rows = ctx["rows"]
+        per_page = ctx["per_page"]
+        page = ctx["page"]
+        total_pages = ctx["total_pages"]
+        search = ctx["search"]
+        start = (page - 1) * per_page
+        end = start + per_page
+        page_rows = rows[start:end]
+        if not page_rows:
+            desc = "검색 결과가 없습니다." if search else "가지고 있는 아이템이 없습니다."
+        else:
+            desc = "\n".join([f"{e} {n} × **{q}**" for (e, n, q) in page_rows])
+        try:
+            target_member = msg.guild.get_member(ctx['target_id']) if msg.guild else None
+            title = f"🎒 {(target_member.display_name if target_member else '유저')}님의 인벤토리"
+            if search:
+                title += f" — 검색: {search}"
+            embed = discord.Embed(title=title, description=desc, color=discord.Color.blurple())
+            embed.set_footer(text=f"페이지 {page}/{total_pages} • 만료됨")
+            await msg.edit(embed=embed)
+        except Exception:
+            pass
+        # 컨트롤 제거 및 컨텍스트 삭제
+        try:
+            await msg.clear_reactions()
+        except Exception:
+            pass
+        self._pages.pop(msg.id, None)
 
 
 async def setup(bot: commands.Bot):

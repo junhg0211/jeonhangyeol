@@ -30,6 +30,29 @@ def init_db():
             );
             """
         )
+        # 아이템 마스터 테이블 (이모지+이름으로 유니크)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                UNIQUE(name, emoji)
+            );
+            """
+        )
+        # 사용자 인벤토리: 항목별 수량
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory (
+                user_id INTEGER NOT NULL,
+                item_id INTEGER NOT NULL,
+                qty INTEGER NOT NULL,
+                PRIMARY KEY (user_id, item_id),
+                FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+            );
+            """
+        )
 
 
 DEFAULT_BALANCE = 1000
@@ -131,3 +154,125 @@ def get_rank(user_id: int) -> tuple[int, int, int]:
         total = int(cur.fetchone()[0])
         rank = higher + 1
         return rank, balance, total
+
+
+# ----------------------
+# Inventory / Items APIs
+# ----------------------
+
+def _get_or_create_item(conn: sqlite3.Connection, name: str, emoji: str) -> int:
+    name = name.strip()
+    emoji = emoji.strip()
+    if not name or not emoji:
+        raise ValueError("Item name and emoji must be non-empty")
+    cur = conn.execute(
+        "SELECT id FROM items WHERE name=? AND emoji=?",
+        (name, emoji),
+    )
+    row = cur.fetchone()
+    if row:
+        return int(row[0])
+    cur = conn.execute(
+        "INSERT INTO items(name, emoji) VALUES(?, ?)",
+        (name, emoji),
+    )
+    return int(cur.lastrowid)
+
+
+def grant_item(user_id: int, name: str, emoji: str, qty: int = 1) -> int:
+    """Give `qty` of item to user. Returns new quantity for that item.
+
+    Creates the item and/or inventory row as needed.
+    """
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        item_id = _get_or_create_item(conn, name, emoji)
+        # upsert
+        conn.execute(
+            """
+            INSERT INTO inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+            ON CONFLICT(user_id, item_id)
+            DO UPDATE SET qty=qty+excluded.qty
+            """,
+            (user_id, item_id, qty),
+        )
+        cur = conn.execute(
+            "SELECT qty FROM inventory WHERE user_id=? AND item_id=?",
+            (user_id, item_id),
+        )
+        return int(cur.fetchone()[0])
+
+
+def transfer_item(sender_id: int, receiver_id: int, name: str, emoji: str, qty: int = 1) -> tuple[int, int]:
+    """Atomically transfer `qty` of an item from sender to receiver.
+
+    Returns (sender_qty, receiver_qty) for this item after transfer.
+    """
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    if sender_id == receiver_id:
+        raise ValueError("Cannot transfer to self")
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        item_id = _get_or_create_item(conn, name, emoji)
+
+        # ensure sender row exists with default 0
+        cur = conn.execute(
+            "SELECT qty FROM inventory WHERE user_id=? AND item_id=?",
+            (sender_id, item_id),
+        )
+        row = cur.fetchone()
+        sender_qty = int(row[0]) if row else 0
+        if sender_qty < qty:
+            raise ValueError("Insufficient item quantity")
+
+        # decrement sender
+        new_sender_qty = sender_qty - qty
+        if row:
+            if new_sender_qty == 0:
+                conn.execute(
+                    "DELETE FROM inventory WHERE user_id=? AND item_id=?",
+                    (sender_id, item_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE inventory SET qty=? WHERE user_id=? AND item_id=?",
+                    (new_sender_qty, sender_id, item_id),
+                )
+
+        # increment receiver
+        conn.execute(
+            """
+            INSERT INTO inventory(user_id, item_id, qty) VALUES(?, ?, ?)
+            ON CONFLICT(user_id, item_id)
+            DO UPDATE SET qty=qty+excluded.qty
+            """,
+            (receiver_id, item_id, qty),
+        )
+        cur = conn.execute(
+            "SELECT qty FROM inventory WHERE user_id=? AND item_id=?",
+            (receiver_id, item_id),
+        )
+        receiver_qty = int(cur.fetchone()[0])
+
+        return new_sender_qty, receiver_qty
+
+
+def list_inventory(user_id: int) -> list[tuple[str, str, int]]:
+    """Return list of (emoji, name, qty) for user's inventory, qty desc then name.
+    Empty list if none.
+    """
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT i.emoji, i.name, inv.qty
+            FROM inventory AS inv
+            JOIN items AS i ON i.id = inv.item_id
+            WHERE inv.user_id = ?
+            ORDER BY inv.qty DESC, i.name ASC
+            """,
+            (user_id,),
+        )
+        return [(str(emoji), str(name), int(qty)) for (emoji, name, qty) in cur.fetchall()]

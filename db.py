@@ -260,19 +260,33 @@ def transfer_item(sender_id: int, receiver_id: int, name: str, emoji: str, qty: 
         return new_sender_qty, receiver_qty
 
 
-def list_inventory(user_id: int) -> list[tuple[str, str, int]]:
+def list_inventory(user_id: int, query: str | None = None) -> list[tuple[str, str, int]]:
     """Return list of (emoji, name, qty) for user's inventory, qty desc then name.
-    Empty list if none.
+    If `query` is provided, filter by name or emoji containing the substring (case-insensitive for name).
     """
     with get_conn() as conn:
-        cur = conn.execute(
-            """
-            SELECT i.emoji, i.name, inv.qty
-            FROM inventory AS inv
-            JOIN items AS i ON i.id = inv.item_id
-            WHERE inv.user_id = ?
-            ORDER BY inv.qty DESC, i.name ASC
-            """,
-            (user_id,),
-        )
+        if query:
+            q = f"%{query.lower()}%"
+            cur = conn.execute(
+                """
+                SELECT i.emoji, i.name, inv.qty
+                FROM inventory AS inv
+                JOIN items AS i ON i.id = inv.item_id
+                WHERE inv.user_id = ?
+                  AND (LOWER(i.name) LIKE ? OR i.emoji LIKE ?)
+                ORDER BY inv.qty DESC, i.name ASC
+                """,
+                (user_id, q, q),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT i.emoji, i.name, inv.qty
+                FROM inventory AS inv
+                JOIN items AS i ON i.id = inv.item_id
+                WHERE inv.user_id = ?
+                ORDER BY inv.qty DESC, i.name ASC
+                """,
+                (user_id,),
+            )
         return [(str(emoji), str(name), int(qty)) for (emoji, name, qty) in cur.fetchall()]

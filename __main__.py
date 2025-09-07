@@ -9,6 +9,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     print(f'{bot.user.name}이(가) 준비되었습니다!')
     print('------------------------------------')
 

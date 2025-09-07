@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import db
+import json
 import asyncio
 import time
 
@@ -79,14 +80,16 @@ class Inventory(commands.Cog):
     @app_commands.command(name="양도", description="아이템을 다른 사람에게 전달합니다.")
     @app_commands.describe(
         받는사람="아이템을 받을 대상",
-        이모지="아이템 이모지",
-        이름="아이템 이름",
+        아이템="보유 아이템에서 선택 (자동완성)",
+        이모지="아이템 이모지 (아이템 미사용 시)",
+        이름="아이템 이름 (아이템 미사용 시)",
         수량="전달할 수량 (기본 1)"
     )
     async def give_item(
         self,
         interaction: discord.Interaction,
         받는사람: discord.Member,
+        아이템: str | None = None,
         이모지: str,
         이름: str,
         수량: int = 1,
@@ -100,6 +103,21 @@ class Inventory(commands.Cog):
             return
         if 받는사람.id == interaction.user.id:
             await interaction.response.send_message("자기 자신에게는 양도할 수 없습니다.", ephemeral=True)
+            return
+
+        # 아이템 자동완성 값 우선 사용
+        if 아이템:
+            try:
+                data = json.loads(아이템) if 아이템.strip().startswith('{') else None
+                if data:
+                    이모지 = str(data.get('e', 이모지))
+                    이름 = str(data.get('n', 이름))
+            except Exception:
+                pass
+
+        # 필수값 검증
+        if not 이모지 or not 이름:
+            await interaction.response.send_message("아이템(자동완성) 또는 이모지+이름을 제공하세요.", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -130,19 +148,35 @@ class Inventory(commands.Cog):
     # 4) 아이템 폐기: /폐기 이모지 이름 [수량]
     @app_commands.command(name="폐기", description="인벤토리에서 아이템을 버립니다.")
     @app_commands.describe(
-        이모지="아이템 이모지",
-        이름="아이템 이름",
+        아이템="보유 아이템에서 선택 (자동완성)",
+        이모지="아이템 이모지 (아이템 미사용 시)",
+        이름="아이템 이름 (아이템 미사용 시)",
         수량="버릴 수량 (기본 1)"
     )
     async def discard(
         self,
         interaction: discord.Interaction,
+        아이템: str | None = None,
         이모지: str,
         이름: str,
         수량: int = 1,
     ):
         if 수량 <= 0:
             await interaction.response.send_message("수량은 0보다 커야 합니다.", ephemeral=True)
+            return
+
+        # 아이템 자동완성 값 우선 사용
+        if 아이템:
+            try:
+                data = json.loads(아이템) if 아이템.strip().startswith('{') else None
+                if data:
+                    이모지 = str(data.get('e', 이모지))
+                    이름 = str(data.get('n', 이름))
+            except Exception:
+                pass
+
+        if not 이모지 or not 이름:
+            await interaction.response.send_message("아이템(자동완성) 또는 이모지+이름을 제공하세요.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -160,6 +194,30 @@ class Inventory(commands.Cog):
         )
         embed.set_footer(text=f"현재 보유 수량: {remaining}개")
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # --------- 자동완성: 보유 아이템 후보 제공 ---------
+    @give_item.autocomplete("아이템")
+    async def _autocomplete_give_item(self, interaction: discord.Interaction, current: str):
+        user_id = interaction.user.id
+        rows = db.list_inventory(user_id, query=current or None)
+        # 최대 25개 제한
+        choices = []
+        for (emoji, name, qty) in rows[:25]:
+            label = f"{emoji} {name} × {qty}"
+            value = json.dumps({"e": emoji, "n": name}, ensure_ascii=False)
+            choices.append(app_commands.Choice(name=label, value=value))
+        return choices
+
+    @discard.autocomplete("아이템")
+    async def _autocomplete_discard_item(self, interaction: discord.Interaction, current: str):
+        user_id = interaction.user.id
+        rows = db.list_inventory(user_id, query=current or None)
+        choices = []
+        for (emoji, name, qty) in rows[:25]:
+            label = f"{emoji} {name} × {qty}"
+            value = json.dumps({"e": emoji, "n": name}, ensure_ascii=False)
+            choices.append(app_commands.Choice(name=label, value=value))
+        return choices
 
     # 3) 테스트/운영용 아이템 지급: /지급 대상 이모지 이름 [수량]
     @app_commands.command(name="지급", description="관리자 전용: 특정 유저에게 아이템을 지급합니다.")

@@ -611,6 +611,13 @@ def patent_min_price(word: str) -> int:
     return 400
 
 
+def patent_usage_fee(price: int) -> int:
+    try:
+        return max(1, int(price) // 50)
+    except Exception:
+        return 1
+
+
 def join_patent_game(guild_id: int, user_id: int) -> None:
     with get_conn() as conn:
         conn.execute(

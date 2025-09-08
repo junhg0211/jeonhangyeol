@@ -96,7 +96,8 @@ class Patent(commands.Cog):
             if owner_id == message.author.id:
                 continue
             words.append(w)
-            charges[owner_id] = charges.get(owner_id, 0) + int(price)
+            fee = db.patent_usage_fee(price)
+            charges[owner_id] = charges.get(owner_id, 0) + int(fee)
         if not charges:
             return
         total = sum(charges.values())
@@ -136,4 +137,3 @@ class Patent(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Patent(bot))
-

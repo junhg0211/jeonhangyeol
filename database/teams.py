@@ -164,6 +164,37 @@ def clear_membership_subtree(guild_id: int, team_id: int) -> int:
         return cur.rowcount or 0
 
 
+def delete_empty_ancestors(guild_id: int, team_id: int) -> int:
+    """Delete empty ancestor teams up to (but not including) the synthetic root.
+
+    A team is considered deletable if it has no members in its subtree AND has no children rows.
+    Returns number of deleted team nodes.
+    """
+    deleted = 0
+    parent = get_team_parent(guild_id, team_id)
+    while parent is not None:
+        # stop at root
+        with get_conn() as conn:
+            row = conn.execute("SELECT name, parent_id FROM teams WHERE guild_id=? AND id=?", (guild_id, parent)).fetchone()
+        if not row:
+            break
+        name = str(row[0])
+        if name == TEAM_ROOT_NAME:
+            break
+        # check children and members
+        children = list_team_children(guild_id, parent)
+        if children:
+            break
+        if team_subtree_has_members(guild_id, parent):
+            break
+        # delete this parent and move up
+        with get_conn() as conn:
+            conn.execute("DELETE FROM teams WHERE guild_id=? AND id=?", (guild_id, parent))
+        deleted += 1
+        parent = get_team_parent(guild_id, parent)
+    return deleted
+
+
 def team_subtree_has_members(guild_id: int, team_id: int) -> bool:
     """Return True if any user is assigned to the given team or its descendants."""
     with get_conn() as conn:

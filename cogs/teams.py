@@ -80,6 +80,10 @@ class Teams(commands.Cog):
             if name != db.TEAM_ROOT_NAME:
                 members = db.list_team_members(interaction.guild.id, tid)
                 total_cnt = db.count_team_subtree_members(interaction.guild.id, tid)
+                children = by_parent.get(tid, [])
+                # skip showing nodes that are completely empty and have no children
+                if total_cnt == 0 and not children:
+                    return
                 member_names: list[str] = []
                 for uid in members:
                     m = interaction.guild.get_member(uid)
@@ -124,9 +128,12 @@ class Teams(commands.Cog):
         cleared = db.clear_membership_subtree(interaction.guild.id, team_id)
         # 팀/하위 팀에 더 이상 인원이 없다면 팀 노드도 삭제
         removed = 0
+        parent_for_prune = db.get_team_parent(interaction.guild.id, team_id)
         try:
             if not db.team_subtree_has_members(interaction.guild.id, team_id):
                 removed = db.delete_team_subtree(interaction.guild.id, team_id)
+                # 상위 빈 팀도 정리
+                removed += db.delete_empty_ancestors(interaction.guild.id, team_id)
         except Exception:
             pass
         extra = f", 팀 노드 {removed}개 삭제" if removed > 0 else ""

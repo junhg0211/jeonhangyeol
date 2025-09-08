@@ -116,14 +116,19 @@ class Teams(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
+        # Defer early to avoid 3s timeout while processing
+        try:
+            await interaction.response.defer(thinking=True, ephemeral=True)
+        except Exception:
+            pass
         tokens = [t for t in (경로 or "").split() if t]
         if not tokens:
-            await interaction.response.send_message("팀 경로가 비어 있습니다.", ephemeral=True)
+            await interaction.followup.send("팀 경로가 비어 있습니다.", ephemeral=True)
             return
         path_norm = " ".join(tokens)
         team_id = db.find_team_by_path(interaction.guild.id, path_norm)
         if team_id is None:
-            await interaction.response.send_message("해당 경로의 팀이 존재하지 않습니다.", ephemeral=True)
+            await interaction.followup.send("해당 경로의 팀이 존재하지 않습니다.", ephemeral=True)
             return
         cleared = db.clear_membership_subtree(interaction.guild.id, team_id)
         # 팀/하위 팀에 더 이상 인원이 없다면 팀 노드도 삭제
@@ -137,7 +142,7 @@ class Teams(commands.Cog):
         except Exception:
             pass
         extra = f", 팀 노드 {removed}개 삭제" if removed > 0 else ""
-        await interaction.response.send_message(f"삭제 완료: 소속 해제 {cleared}명 (팀 '{path_norm}' 및 하위){extra}", ephemeral=True)
+        await interaction.followup.send(f"삭제 완료: 소속 해제 {cleared}명 (팀 '{path_norm}' 및 하위){extra}", ephemeral=True)
 
     # (직급 관련 명령 제거)
 

@@ -101,9 +101,10 @@ class Auctions(commands.Cog):
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-        # 설정된 채널로 새 경매 알림 전송
+        # 설정된 '알림 채널'로 새 경매 알림 전송
         if interaction.guild:
-            ch_id = db.get_auction_channel(interaction.guild.id)
+            # use generic notify channel (back-compat alias to same storage)
+            ch_id = db.get_notify_channel(interaction.guild.id)
             if ch_id:
                 ch = self.bot.get_channel(ch_id)
                 if isinstance(ch, (discord.TextChannel, discord.Thread)):

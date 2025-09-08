@@ -250,6 +250,13 @@ def get_auction_channel(guild_id: int) -> int | None:
             return None
         return int(row[0]) if row[0] is not None else None
 
+# Back-compat alias: treat auction_channel as generic notify channel
+def set_notify_channel(guild_id: int, channel_id: int | None) -> None:
+    return set_auction_channel(guild_id, channel_id)
+
+def get_notify_channel(guild_id: int) -> int | None:
+    return get_auction_channel(guild_id)
+
 
 # ----------------------
 # Auction APIs

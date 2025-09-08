@@ -106,6 +106,12 @@ class Teams(commands.Cog):
         if not is_self and not (perms and (perms.manage_guild or perms.administrator)):
             await interaction.response.send_message("다른 사용자의 팀 변경은 관리자만 가능합니다.", ephemeral=True)
             return
+        # 이전 팀 저장(이동 후 비는 팀 정리용)
+        prev_team_id = None
+        try:
+            prev_team_id = db.get_user_team_id(interaction.guild.id, 대상.id)
+        except Exception:
+            pass
         try:
             team_id = db.ensure_team_path(interaction.guild.id, 경로)
             db.set_user_team(interaction.guild.id, 대상.id, team_id)
@@ -115,7 +121,14 @@ class Teams(commands.Cog):
         # 닉네임 반영 시도
         changed = await self._apply_member_nick(대상)
         note = " (닉네임 반영됨)" if changed else ""
-        await interaction.response.send_message(f"{대상.mention}님의 팀이 '{경로}'로 변경되었습니다.{note}", ephemeral=True)
+        # 비는 팀 정리(이전 팀부터 위로 올라가며 비어 있으면 삭제)
+        pruned = 0
+        try:
+            pruned = db.prune_empty_upwards(interaction.guild.id, prev_team_id)
+        except Exception:
+            pass
+        extra = f" — 빈 팀 {pruned}개 삭제" if pruned > 0 else ""
+        await interaction.response.send_message(f"{대상.mention}님의 팀이 '{경로}'로 변경되었습니다.{note}{extra}", ephemeral=True)
 
 
     @group.command(name="목록", description="팀별 인원 목록을 표시합니다.")
@@ -164,6 +177,42 @@ class Teams(commands.Cog):
 
         embed = discord.Embed(title="👥 팀 목록", description="\n".join(lines) if lines else "(표시할 팀이 없습니다)", color=discord.Color.purple())
         await interaction.response.send_message(embed=embed)
+
+    @group.command(name="정리", description="사람이 한 명도 없는 팀(하위 포함)을 일괄 삭제합니다.")
+    @app_commands.default_permissions(manage_guild=True)
+    async def prune_empty(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        # 깊은 팀부터 검사하며 비어 있으면 삭제
+        rows = db.list_teams(interaction.guild.id)
+        if not rows:
+            await interaction.response.send_message("등록된 팀이 없습니다.", ephemeral=True)
+            return
+        # build parent map and order by depth desc
+        parents = {}
+        for tid, name, parent in rows:
+            parents[tid] = parent
+        # compute depth from root
+        depth = {}
+        for tid, name, parent in rows:
+            d = 0
+            p = parent
+            while p is not None:
+                d += 1
+                p = parents.get(p)
+            depth[tid] = d
+        deleted = 0
+        # skip root by name
+        for tid, name, parent in sorted(rows, key=lambda r: depth.get(r[0], 0), reverse=True):
+            if name == db.TEAM_ROOT_NAME:
+                continue
+            try:
+                if not db.team_subtree_has_members(interaction.guild.id, tid):
+                    deleted += db.delete_team_subtree(interaction.guild.id, tid)
+            except Exception:
+                pass
+        await interaction.response.send_message(f"정리 완료: 삭제된 팀 {deleted}개", ephemeral=True)
 
     @group.command(name="닉네임적용", description="팀/직급 정보를 닉네임에 반영합니다.")
     @app_commands.describe(대상="미지정 시 본인")

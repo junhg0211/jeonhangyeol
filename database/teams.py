@@ -57,6 +57,88 @@ def list_team_members(guild_id: int, team_id: int):
         cur = conn.execute("SELECT user_id FROM user_teams WHERE guild_id=? AND team_id=? ORDER BY user_id ASC", (guild_id, team_id))
         return [int(u) for (u,) in cur.fetchall()]
 
+
+def get_team_parent(guild_id: int, team_id: int) -> int | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT parent_id FROM teams WHERE guild_id=? AND id=?", (guild_id, team_id)).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+
+def list_team_children(guild_id: int, parent_id: int) -> list[int]:
+    with get_conn() as conn:
+        cur = conn.execute("SELECT id FROM teams WHERE guild_id=? AND parent_id=? ORDER BY id ASC", (guild_id, parent_id))
+        return [int(i) for (i,) in cur.fetchall()]
+
+
+def team_subtree_has_members(guild_id: int, team_id: int) -> bool:
+    """Return True if any user is assigned to the given team or its descendants."""
+    with get_conn() as conn:
+        # gather subtree ids via DFS
+        to_visit = [int(team_id)]
+        ids: list[int] = []
+        while to_visit:
+            cur_id = to_visit.pop()
+            ids.append(cur_id)
+            rows = conn.execute("SELECT id FROM teams WHERE guild_id=? AND parent_id=?", (guild_id, cur_id)).fetchall()
+            to_visit.extend(int(r[0]) for r in rows)
+        # check any membership
+        qmarks = ",".join(["?"] * len(ids))
+        row = conn.execute(
+            f"SELECT 1 FROM user_teams WHERE guild_id=? AND team_id IN ({qmarks}) LIMIT 1",
+            (guild_id, *ids),
+        ).fetchone()
+        return row is not None
+
+
+def delete_team_subtree(guild_id: int, team_id: int) -> int:
+    """Delete the team and all its descendant teams. Returns deleted row count."""
+    with get_conn() as conn:
+        # collect subtree
+        to_visit = [int(team_id)]
+        ids: list[int] = []
+        while to_visit:
+            cur_id = to_visit.pop()
+            ids.append(cur_id)
+            rows = conn.execute("SELECT id FROM teams WHERE guild_id=? AND parent_id=?", (guild_id, cur_id)).fetchall()
+            to_visit.extend(int(r[0]) for r in rows)
+        # delete all (children first not required without FK)
+        qmarks = ",".join(["?"] * len(ids))
+        cur = conn.execute(f"DELETE FROM teams WHERE guild_id=? AND id IN ({qmarks})", (guild_id, *ids))
+        return cur.rowcount or 0
+
+
+def prune_empty_upwards(guild_id: int, team_id: int | None) -> int:
+    """From a starting team, delete the subtree if it has no members; then climb to parent and repeat.
+
+    Never deletes the synthetic root team. Returns total deleted team rows.
+    """
+    if team_id is None:
+        return 0
+    deleted = 0
+    with get_conn() as conn:
+        # fetch root id to protect
+        row = conn.execute("SELECT id FROM teams WHERE guild_id=? AND name=? AND parent_id IS NULL", (guild_id, TEAM_ROOT_NAME)).fetchone()
+        root_id = int(row[0]) if row else None
+    cur_id = int(team_id)
+    while True:
+        if root_id is not None and cur_id == root_id:
+            break
+        # if team no longer exists, stop
+        with get_conn() as conn:
+            row = conn.execute("SELECT id, parent_id FROM teams WHERE guild_id=? AND id=?", (guild_id, cur_id)).fetchone()
+        if not row:
+            break
+        parent_id = int(row[1]) if row[1] is not None else None
+        if not team_subtree_has_members(guild_id, cur_id):
+            deleted += delete_team_subtree(guild_id, cur_id)
+            if parent_id is None:
+                break
+            cur_id = parent_id
+            continue
+        else:
+            break
+    return deleted
+
 def get_user_team_id(guild_id: int, user_id: int) -> int | None:
     with get_conn() as conn:
         row = conn.execute(

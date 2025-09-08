@@ -142,9 +142,26 @@ class ActivityIndex(commands.Cog):
                     gap_bonus = (60.0 - gap) / 60.0  # 0..1
 
                 base_score = a * chat_c + b * react_c + c * voice_c + 0.5 * gap_bonus
+
+                # relative boost vs one hour ago (5-min window sums)
+                REL_WIN = 300
+                REL_GAP = 3600
+                REL_BETA = 0.5
+                cur_s = db.get_activity_totals(guild.id, cat, ts - REL_WIN, ts)
+                prev_s = db.get_activity_totals(guild.id, cat, ts - REL_GAP - REL_WIN, ts - REL_GAP)
+                cur_w = a * cur_s[0] + b * cur_s[1] + c * cur_s[2]
+                prev_w = a * prev_s[0] + b * prev_s[1] + c * prev_s[2]
+                ratio = (cur_w + 1.0) / (prev_w + 1.0)
+                rel_factor = 1.0 + REL_BETA * (ratio - 1.0)
+                rel_factor = max(0.8, min(1.2, rel_factor))
+
                 # baseline 1.0 -> neutral; scale factor S tunes volatility
                 S = 8.0
-                change_pct = max(-0.02, min(0.02, (base_score - 1.0) / S))
+                DECAY = 0.001  # 0.1% downward drift per minute
+                change_raw = (base_score - 1.0) / S
+                change_raw *= rel_factor
+                change_raw -= DECAY
+                change_pct = max(-0.02, min(0.02, change_raw))
 
                 # fetch snapshot
                 try:
@@ -253,6 +270,18 @@ class ActivityIndex(commands.Cog):
         embed.add_field(name="반응", value=f"{cur_react:.2f}", inline=True)
         embed.set_footer(text="한국시간 09:00–21:00 분단위 집계")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @group.command(name="규칙", description="활동 지수 산정 기준을 보여줍니다.")
+    async def show_rules(self, interaction: discord.Interaction):
+        text = (
+            "집계 시간: KST 09:00–21:00, 1분 단위\n"
+            "지수: 채팅/통화/반응 3종\n"
+            "분당 점수: 카테고리별 가중합(채팅·반응·통화) + 채팅간격 보너스\n"
+            "상대 비교: 최근 5분 활동을 1시간 전 같은 구간과 비교하여 더 활발하면 상승 가중(최대 +20%), 덜 활발하면 축소(최소 −20%)\n"
+            "변동 산식: (점수−1)/S 에 상대 가중 적용 후 분당 감쇠 0.1%를 빼고, 최종 ±2%로 제한\n"
+            "일중 범위: 개장가의 50%~200%로 클램프"
+        )
+        await interaction.response.send_message(text, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

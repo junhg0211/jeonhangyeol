@@ -687,6 +687,21 @@ def get_index_ticks_since(guild_id: int, category: str, since_ts: int):
         return [(int(ts), float(px)) for (ts, px) in cur.fetchall()]
 
 
+def get_activity_totals(guild_id: int, category: str, start_ts: int, end_ts: int) -> tuple[int, int, int]:
+    """Return sums of (chat_count, react_count, voice_count) over a window."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT COALESCE(SUM(chat_count),0), COALESCE(SUM(react_count),0), COALESCE(SUM(voice_count),0)
+            FROM activity_ticks
+            WHERE guild_id=? AND category=? AND ts BETWEEN ? AND ?
+            """,
+            (guild_id, category, int(start_ts), int(end_ts)),
+        )
+        row = cur.fetchone()
+        return int(row[0]), int(row[1]), int(row[2])
+
+
 # ----------------------
 # Orders API
 # ----------------------

@@ -4,6 +4,8 @@ import discord
 from discord.ext import commands
 import os
 import sys
+import asyncio
+import signal
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -23,8 +25,6 @@ async def load_cogs():
             except Exception as e:
                 print(f'{filename[:-3]} cog 로드 중 오류 발생: {e}')
 
-import asyncio
-
 async def main():
     await load_cogs()
 
@@ -43,7 +43,44 @@ async def main():
 
     with open("bot_token.txt", "r") as file:
         token = file.read().strip()
-    await bot.start(token)
+    try:
+        # Optional: set signal handlers for graceful shutdown
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
+
+        def _signal_handler(signame):
+            print(f"\n[{signame}] 종료 신호 수신 — 안전하게 종료합니다…")
+            stop_event.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _signal_handler, sig.name)
+            except NotImplementedError:
+                # Windows 등에서 add_signal_handler 미지원 시 기본 handler 등록
+                signal.signal(sig, lambda s, f: _signal_handler(getattr(s, 'name', str(s))))
+
+        # Run bot and wait for stop_event
+        bot_task = loop.create_task(bot.start(token))
+        stopper = loop.create_task(stop_event.wait())
+        done, pending = await asyncio.wait({bot_task, stopper}, return_when=asyncio.FIRST_COMPLETED)
+
+        # If stop requested, close bot gracefully
+        if stopper in done and not bot_task.done():
+            await bot.close()
+            bot_task.cancel()
+            try:
+                await bot_task
+            except asyncio.CancelledError:
+                pass
+    except KeyboardInterrupt:
+        print("\n[CTRL+C] 종료 요청 — 안전하게 종료합니다…")
+    except asyncio.CancelledError:
+        print("작업이 취소되어 종료합니다…")
+    finally:
+        try:
+            await bot.close()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     asyncio.run(main())

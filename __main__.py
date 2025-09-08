@@ -12,7 +12,21 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
+    # Global sync (may take time to propagate)
+    try:
+        await bot.tree.sync()
+        print('[commands] Global sync complete')
+    except Exception as e:
+        print(f'[commands] Global sync error: {e}')
+
+    # Per-guild fast sync so new commands appear immediately
+    for g in bot.guilds:
+        try:
+            await bot.tree.sync(guild=discord.Object(id=g.id))
+            print(f"[commands] Guild sync: {g.name} ({g.id})")
+        except Exception as e:
+            print(f"[commands] Guild sync failed for {g.id}: {e}")
+
     print(f'{bot.user.name}이(가) 준비되었습니다!')
     print('------------------------------------')
 

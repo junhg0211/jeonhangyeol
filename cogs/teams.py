@@ -47,14 +47,11 @@ class Teams(commands.Cog):
                 added_any = True
             else:
                 break
-        # rank 부착 시도
-        if rank:
+        # rank 부착 시도(팀명이 하나 이상 있을 때만)
+        if rank and suffix_tokens:
             need = (1 if suffix_tokens else 0) + len(rank)
             if need <= remain:
                 suffix_tokens.append(rank)
-            else:
-                # rank가 안 붙더라도 팀만 유지
-                pass
         return " ".join(suffix_tokens)
 
     async def _apply_member_nick(self, member: discord.Member) -> bool:
@@ -286,6 +283,35 @@ class Teams(commands.Cog):
         # 닉네임 반영
         await self._apply_member_nick(대상)
         await interaction.response.send_message(f"{대상.mention}님의 직급을 '{직급}'(으)로 설정했습니다.", ephemeral=True)
+
+    @group.command(name="나가기", description="내 팀 소속을 해제합니다.")
+    async def leave_team(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        prev_team_id = db.get_user_team_id(interaction.guild.id, interaction.user.id)
+        if prev_team_id is None:
+            await interaction.response.send_message("이미 팀에 소속되어 있지 않습니다.", ephemeral=True)
+            return
+        # 팀 소속 해제
+        db.clear_user_team(interaction.guild.id, interaction.user.id)
+        # 닉네임 원복(접미사 제거)
+        try:
+            # 강제로 base만 남기기 위해 접미사가 없는 형태로 변경
+            base = self._extract_base_name(interaction.user.display_name)
+            me = interaction.guild.me  # type: ignore
+            if me and me.guild_permissions.manage_nicknames and interaction.user.top_role < me.top_role:
+                await interaction.user.edit(nick=base, reason="팀 나가기(봇)")
+        except Exception:
+            pass
+        # 빈 팀 정리
+        pruned = 0
+        try:
+            pruned = db.prune_empty_upwards(interaction.guild.id, prev_team_id)
+        except Exception:
+            pass
+        extra = f" — 빈 팀 {pruned}개 삭제" if pruned > 0 else ""
+        await interaction.response.send_message(f"팀 소속을 해제했습니다.{extra}", ephemeral=True)
 
     # 역할 변경 시 닉네임 자동 반영
     @commands.Cog.listener()

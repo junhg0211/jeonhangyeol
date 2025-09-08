@@ -43,6 +43,15 @@ def set_user_team(guild_id: int, user_id: int, team_id: int) -> None:
         )
 
 
+def clear_user_team(guild_id: int, user_id: int) -> None:
+    """Remove user's team assignment (row delete)."""
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM user_teams WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id),
+        )
+
+
 def list_teams(guild_id: int):
     with get_conn() as conn:
         cur = conn.execute(
@@ -201,6 +210,6 @@ def get_rank_roles(guild_id: int) -> list[str]:
 
 __all__ = [
     'TEAM_ROOT_NAME',
-    'ensure_team_path','set_user_team','list_teams','list_team_members',
+    'ensure_team_path','set_user_team','clear_user_team','list_teams','list_team_members',
     'get_user_team_id','get_team_path_names','set_rank_roles','get_rank_roles',
 ]

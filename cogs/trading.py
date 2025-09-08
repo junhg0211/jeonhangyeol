@@ -1,10 +1,11 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 
 import db
 from zoneinfo import ZoneInfo
 from datetime import datetime
+import time
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -23,6 +24,7 @@ class Trading(commands.Cog):
         self.bot = bot
         db.init_db()
         db.ensure_instruments()
+        # start background recording after ready
 
     group = app_commands.Group(name="투자", description="활동 지수 투자")
 
@@ -136,7 +138,35 @@ class Trading(commands.Cog):
     async def _ac_sell(self, interaction: discord.Interaction, current: str):
         return self._symbol_choices(current)
 
+    # -------- ETF minute ticks --------
+    @tasks.loop(seconds=60)
+    async def etf_minute_tick(self):
+        if not self._is_market_open():
+            return
+        ts = int(time.time())
+        for guild in list(self.bot.guilds):
+            for sym, _ in SYMBOLS:
+                try:
+                    px = db.get_symbol_price(guild.id, sym)
+                except Exception:
+                    continue
+                prev = db.get_last_etf_price(guild.id, sym) or px
+                delta = px - prev
+                try:
+                    db.record_etf_tick(guild.id, ts, sym, px, delta)
+                except Exception:
+                    pass
+
+    @etf_minute_tick.before_loop
+    async def before_etf_minute_tick(self):
+        if not self.bot.is_ready():
+            await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.etf_minute_tick.is_running():
+            self.etf_minute_tick.start()
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Trading(bot))
-

@@ -30,6 +30,20 @@ def init_db():
             );
             """
         )
+        # ETF 분봉 기록
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS etf_ticks (
+                guild_id INTEGER NOT NULL,
+                ts INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL,
+                delta REAL NOT NULL,
+                PRIMARY KEY (guild_id, ts, symbol),
+                FOREIGN KEY (symbol) REFERENCES instruments(symbol) ON DELETE CASCADE
+            );
+            """
+        )
         # 투자: 상품, 포지션, 체결 내역
         conn.execute(
             """
@@ -586,6 +600,24 @@ def list_positions(guild_id: int, user_id: int):
             (guild_id, user_id),
         )
         return [(str(s), int(q), float(a)) for (s, q, a) in cur.fetchall()]
+
+
+def get_last_etf_price(guild_id: int, symbol: str) -> float | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT price FROM etf_ticks WHERE guild_id=? AND symbol=? ORDER BY ts DESC LIMIT 1",
+            (guild_id, symbol),
+        )
+        row = cur.fetchone()
+        return float(row[0]) if row else None
+
+
+def record_etf_tick(guild_id: int, ts: int, symbol: str, price: float, delta: float) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO etf_ticks(guild_id, ts, symbol, price, delta) VALUES(?, ?, ?, ?, ?)",
+            (guild_id, ts, symbol, float(price), float(delta)),
+        )
 
 
 # ----------------------

@@ -436,7 +436,7 @@ def get_notify_channel(guild_id: int) -> int | None:
 # ----------------------
 # Activity index APIs
 # ----------------------
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")

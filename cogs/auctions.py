@@ -298,6 +298,31 @@ class Auctions(commands.Cog):
             pass
         self._pages.pop(msg.id, None)
 
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        # Auto-auction all items of a member who left (max duration, start price 1)
+        try:
+            items = db.list_inventory(member.id)
+        except Exception:
+            items = []
+        if not items:
+            return
+        for emoji, name, qty in items:
+            if qty <= 0:
+                continue
+            try:
+                db.create_auction(
+                    seller_id=member.id,
+                    name=name,
+                    emoji=emoji,
+                    qty=qty,
+                    start_price=1,
+                    duration_seconds=30 * 24 * 3600,
+                    guild_id=member.guild.id if member.guild else None,
+                )
+            except Exception:
+                continue
+
     # background finalizer
     @tasks.loop(seconds=30)
     async def closer(self):

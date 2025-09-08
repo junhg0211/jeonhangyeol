@@ -37,7 +37,9 @@ class Attendance(commands.Cog):
             out = []
             for uid, streak in uids[:topn]:
                 m = interaction.guild.get_member(uid)
-                name = m.display_name if m else f"<@{uid}>"
+                if not m:
+                    continue  # skip users no longer in guild
+                name = m.display_name
                 out.append(f"{name} ({streak}일)")
             return out
         lines_checked = resolve(checked)
@@ -56,19 +58,22 @@ class Attendance(commands.Cog):
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
         topn = max(1, min(int(상위), 50))
-        rows = db.attendance_max_streak_leaderboard(interaction.guild.id, topn)
+        rows = db.attendance_max_streak_leaderboard(interaction.guild.id, topn * 2)
         if not rows:
             await interaction.response.send_message("아직 출석 기록이 없습니다.", ephemeral=True)
             return
         lines = []
         for uid, ms, td in rows:
             m = interaction.guild.get_member(uid)
-            name = m.display_name if m else f"<@{uid}>"
+            if not m:
+                continue
+            name = m.display_name
             lines.append(f"{name} — 최대 {ms}일 (총 {td}회)")
+            if len(lines) >= topn:
+                break
         embed = discord.Embed(title="🏆 최대 연속 출석", description="\n".join(lines), color=discord.Color.gold())
         await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Attendance(bot))
-

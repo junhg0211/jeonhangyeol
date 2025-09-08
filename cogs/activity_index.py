@@ -255,19 +255,29 @@ class ActivityIndex(commands.Cog):
             return
         date_kst = self._today_kst_str()
         try:
-            cur_chat, _, _ = db.get_index_bounds(interaction.guild.id, date_kst, 'chat')
-            cur_voice, _, _ = db.get_index_bounds(interaction.guild.id, date_kst, 'voice')
-            cur_react, _, _ = db.get_index_bounds(interaction.guild.id, date_kst, 'react')
+            cur_chat, _, _, _, _, open_chat = db.get_index_info(interaction.guild.id, date_kst, 'chat')
+            cur_voice, _, _, _, _, open_voice = db.get_index_info(interaction.guild.id, date_kst, 'voice')
+            cur_react, _, _, _, _, open_react = db.get_index_info(interaction.guild.id, date_kst, 'react')
         except Exception:
             db.ensure_indices_for_day(interaction.guild.id, date_kst)
-            cur_chat, _, _ = db.get_index_bounds(interaction.guild.id, date_kst, 'chat')
-            cur_voice, _, _ = db.get_index_bounds(interaction.guild.id, date_kst, 'voice')
-            cur_react, _, _ = db.get_index_bounds(interaction.guild.id, date_kst, 'react')
+            cur_chat, _, _, _, _, open_chat = db.get_index_info(interaction.guild.id, date_kst, 'chat')
+            cur_voice, _, _, _, _, open_voice = db.get_index_info(interaction.guild.id, date_kst, 'voice')
+            cur_react, _, _, _, _, open_react = db.get_index_info(interaction.guild.id, date_kst, 'react')
+
+        def pct(cur, open_):
+            try:
+                return (cur - open_) / open_ * 100.0 if open_ != 0 else 0.0
+            except Exception:
+                return 0.0
+
+        p_chat = pct(cur_chat, open_chat)
+        p_voice = pct(cur_voice, open_voice)
+        p_react = pct(cur_react, open_react)
 
         embed = discord.Embed(title="📈 활동 지수", color=discord.Color.blue())
-        embed.add_field(name="채팅", value=f"{cur_chat:.2f}", inline=True)
-        embed.add_field(name="통화", value=f"{cur_voice:.2f}", inline=True)
-        embed.add_field(name="반응", value=f"{cur_react:.2f}", inline=True)
+        embed.add_field(name="채팅", value=f"{cur_chat:.2f} ({p_chat:+.2f}%)", inline=True)
+        embed.add_field(name="통화", value=f"{cur_voice:.2f} ({p_voice:+.2f}%)", inline=True)
+        embed.add_field(name="반응", value=f"{cur_react:.2f} ({p_react:+.2f}%)", inline=True)
         embed.set_footer(text="한국시간 09:00–21:00 분단위 집계")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

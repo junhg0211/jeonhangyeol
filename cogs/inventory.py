@@ -77,21 +77,17 @@ class Inventory(commands.Cog):
         asyncio.create_task(self._schedule_expire(msg))
 
     # 2) 아이템 양도: /양도 받는사람 이모지 이름 [수량]
-    @app_commands.command(name="양도", description="아이템을 다른 사람에게 전달합니다.")
+    @app_commands.command(name="양도", description="보유 아이템을 다른 사람에게 전달합니다.")
     @app_commands.describe(
         받는사람="아이템을 받을 대상",
         아이템="보유 아이템에서 선택 (자동완성)",
-        이모지="아이템 이모지 (아이템 미사용 시)",
-        이름="아이템 이름 (아이템 미사용 시)",
         수량="전달할 수량 (기본 1)"
     )
     async def give_item(
         self,
         interaction: discord.Interaction,
         받는사람: discord.Member,
-        아이템: str | None = None,
-        이모지: str | None = None,
-        이름: str | None = None,
+        아이템: str,
         수량: int = 1,
     ):
         # 기본 검증
@@ -105,19 +101,16 @@ class Inventory(commands.Cog):
             await interaction.response.send_message("자기 자신에게는 양도할 수 없습니다.", ephemeral=True)
             return
 
-        # 아이템 자동완성 값 우선 사용
-        if 아이템:
-            try:
-                data = json.loads(아이템) if 아이템.strip().startswith('{') else None
-                if data:
-                    이모지 = str(data.get('e', 이모지))
-                    이름 = str(data.get('n', 이름))
-            except Exception:
-                pass
-
-        # 필수값 검증
-        if not 이모지 or not 이름:
-            await interaction.response.send_message("아이템(자동완성) 또는 이모지+이름을 제공하세요.", ephemeral=True)
+        # 아이템 자동완성 값 파싱(필수)
+        try:
+            data = json.loads(아이템)
+            emo = str(data.get('e', '')).strip()
+            name = str(data.get('n', '')).strip()
+        except Exception:
+            await interaction.response.send_message("아이템을 자동완성 목록에서 선택하세요.", ephemeral=True)
+            return
+        if not emo or not name:
+            await interaction.response.send_message("잘못된 아이템입니다. 다시 선택하세요.", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -126,8 +119,8 @@ class Inventory(commands.Cog):
             sender_qty, receiver_qty = db.transfer_item(
                 sender_id=interaction.user.id,
                 receiver_id=받는사람.id,
-                name=이름,
-                emoji=이모지,
+                name=name,
+                emoji=emo,
                 qty=수량,
             )
         except ValueError as e:
@@ -138,7 +131,7 @@ class Inventory(commands.Cog):
             title="🎁 아이템 양도 완료",
             description=(
                 f"{interaction.user.mention}님이 {받는사람.mention}님에게\n"
-                f"{이모지} {이름} × **{수량}** 을(를) 전달했습니다."
+                f"{emo} {name} × **{수량}** 을(를) 전달했습니다."
             ),
             color=discord.Color.green(),
         )
@@ -149,47 +142,41 @@ class Inventory(commands.Cog):
     @app_commands.command(name="폐기", description="인벤토리에서 아이템을 버립니다.")
     @app_commands.describe(
         아이템="보유 아이템에서 선택 (자동완성)",
-        이모지="아이템 이모지 (아이템 미사용 시)",
-        이름="아이템 이름 (아이템 미사용 시)",
         수량="버릴 수량 (기본 1)"
     )
     async def discard(
         self,
         interaction: discord.Interaction,
-        아이템: str | None = None,
-        이모지: str | None = None,
-        이름: str | None = None,
+        아이템: str,
         수량: int = 1,
     ):
         if 수량 <= 0:
             await interaction.response.send_message("수량은 0보다 커야 합니다.", ephemeral=True)
             return
 
-        # 아이템 자동완성 값 우선 사용
-        if 아이템:
-            try:
-                data = json.loads(아이템) if 아이템.strip().startswith('{') else None
-                if data:
-                    이모지 = str(data.get('e', 이모지))
-                    이름 = str(data.get('n', 이름))
-            except Exception:
-                pass
-
-        if not 이모지 or not 이름:
-            await interaction.response.send_message("아이템(자동완성) 또는 이모지+이름을 제공하세요.", ephemeral=True)
+        # 아이템 자동완성 값 파싱(필수)
+        try:
+            data = json.loads(아이템)
+            emo = str(data.get('e', '')).strip()
+            name = str(data.get('n', '')).strip()
+        except Exception:
+            await interaction.response.send_message("아이템을 자동완성 목록에서 선택하세요.", ephemeral=True)
+            return
+        if not emo or not name:
+            await interaction.response.send_message("잘못된 아이템입니다. 다시 선택하세요.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
 
         try:
-            remaining = db.discard_item(interaction.user.id, 이름, 이모지, 수량)
+            remaining = db.discard_item(interaction.user.id, name, emo, 수량)
         except ValueError as e:
             await interaction.followup.send(str(e), ephemeral=True)
             return
 
         embed = discord.Embed(
             title="🗑️ 아이템 폐기 완료",
-            description=f"{이모지} {이름} × **{수량}** 을(를) 버렸습니다.",
+            description=f"{emo} {name} × **{수량}** 을(를) 버렸습니다.",
             color=discord.Color.red(),
         )
         embed.set_footer(text=f"현재 보유 수량: {remaining}개")

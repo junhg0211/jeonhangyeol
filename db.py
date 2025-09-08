@@ -41,6 +41,38 @@ def init_db():
             );
             """
         )
+        # 경매 테이블
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auctions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                qty INTEGER NOT NULL,
+                start_price INTEGER NOT NULL,
+                current_bid INTEGER,
+                current_bidder_id INTEGER,
+                created_at INTEGER NOT NULL,
+                end_at INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                winner_id INTEGER,
+                winning_bid INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auction_bids (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                auction_id INTEGER NOT NULL,
+                bidder_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (auction_id) REFERENCES auctions(id) ON DELETE CASCADE
+            );
+            """
+        )
         # 사용자 인벤토리: 항목별 수량
         conn.execute(
             """
@@ -173,6 +205,249 @@ def rank_page(offset: int, limit: int) -> list[tuple[int, int]]:
             (limit, offset),
         )
         return [(int(uid), int(bal)) for uid, bal in cur.fetchall()]
+
+
+# ----------------------
+# Auction APIs
+# ----------------------
+import time as _time
+
+
+def create_auction(seller_id: int, name: str, emoji: str, qty: int, start_price: int, duration_seconds: int) -> int:
+    """Create an auction by moving items from seller inventory into escrow.
+
+    Returns auction id. Raises ValueError on invalid input or insufficient qty.
+    """
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    if start_price < 0:
+        raise ValueError("Start price must be >= 0")
+    if duration_seconds < 3600 or duration_seconds > 30 * 24 * 3600:
+        raise ValueError("Duration must be between 1 hour and 30 days")
+    now = int(_time.time())
+    end_at = now + duration_seconds
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # Ensure item exists; then decrease from seller inventory
+        # Reuse discard_item logic inline to keep in same transaction
+        cur = conn.execute(
+            "SELECT id FROM items WHERE name=? AND emoji=?",
+            (name.strip(), emoji.strip()),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Item not found in catalog")
+        item_id = int(row[0])
+        cur = conn.execute(
+            "SELECT qty FROM inventory WHERE user_id=? AND item_id=?",
+            (seller_id, item_id),
+        )
+        row = cur.fetchone()
+        have = int(row[0]) if row else 0
+        if have < qty:
+            raise ValueError("Insufficient item quantity")
+        new_qty = have - qty
+        if new_qty == 0:
+            conn.execute("DELETE FROM inventory WHERE user_id=? AND item_id=?", (seller_id, item_id))
+        else:
+            conn.execute(
+                "UPDATE inventory SET qty=? WHERE user_id=? AND item_id=?",
+                (new_qty, seller_id, item_id),
+            )
+
+        cur = conn.execute(
+            """
+            INSERT INTO auctions (seller_id, name, emoji, qty, start_price, created_at, end_at, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open')
+            """,
+            (seller_id, name.strip(), emoji.strip(), qty, start_price, now, end_at),
+        )
+        return int(cur.lastrowid)
+
+
+def get_auction(auction_id: int):
+    with get_conn() as conn:
+        cur = conn.execute("SELECT * FROM auctions WHERE id=?", (auction_id,))
+        return cur.fetchone()
+
+
+def list_open_auctions(offset: int, limit: int, query: str | None = None):
+    limit = max(1, min(int(limit), 50))
+    offset = max(0, int(offset))
+    with get_conn() as conn:
+        if query:
+            q = f"%{query.lower()}%"
+            cur = conn.execute(
+                """
+                SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
+                FROM auctions
+                WHERE status='open' AND end_at > ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)
+                ORDER BY end_at ASC
+                LIMIT ? OFFSET ?
+                """,
+                (int(_time.time()), q, q, limit, offset),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
+                FROM auctions
+                WHERE status='open' AND end_at > ?
+                ORDER BY end_at ASC
+                LIMIT ? OFFSET ?
+                """,
+                (int(_time.time()), limit, offset),
+            )
+        return cur.fetchall()
+
+
+def count_open_auctions(query: str | None = None) -> int:
+    with get_conn() as conn:
+        if query:
+            q = f"%{query.lower()}%"
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)",
+                (int(_time.time()), q, q),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ?",
+                (int(_time.time()),),
+            )
+        return int(cur.fetchone()[0])
+
+
+def place_bid(auction_id: int, bidder_id: int, amount: int):
+    """Place a bid with escrow: deduct from bidder, refund previous top bidder.
+
+    Returns (current_bid, current_bidder_id).
+    """
+    if amount <= 0:
+        raise ValueError("Bid must be positive")
+    now = int(_time.time())
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "SELECT seller_id, start_price, current_bid, current_bidder_id, end_at, status, name, emoji, qty FROM auctions WHERE id=?",
+            (auction_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Auction not found")
+        seller_id, start_price, current_bid, current_bidder_id, end_at, status, name, emoji, qty = row
+        if status != 'open' or end_at <= now:
+            raise ValueError("Auction is closed")
+        if bidder_id == seller_id:
+            raise ValueError("Seller cannot bid on own auction")
+        min_required = current_bid if current_bid is not None else start_price
+        if amount <= (min_required if min_required is not None else 0):
+            raise ValueError("Bid must be higher than current price")
+
+        # Ensure bidder has funds and deduct
+        # Ensure bidder balance row exists
+        cur = conn.execute("SELECT balance FROM balances WHERE user_id=?", (bidder_id,))
+        rowb = cur.fetchone()
+        if rowb is None:
+            conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (bidder_id, DEFAULT_BALANCE))
+            bal = DEFAULT_BALANCE
+        else:
+            bal = int(rowb[0])
+        if bal < amount:
+            raise ValueError("Insufficient funds")
+        conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (bal - amount, bidder_id))
+
+        # Refund previous top bidder, if any
+        if current_bidder_id is not None and current_bid is not None:
+            cur = conn.execute("SELECT balance FROM balances WHERE user_id=?", (current_bidder_id,))
+            rowp = cur.fetchone()
+            prev_bal = int(rowp[0]) if rowp else DEFAULT_BALANCE
+            if rowp is None:
+                conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (current_bidder_id, prev_bal))
+            conn.execute(
+                "UPDATE balances SET balance=? WHERE user_id=?",
+                (prev_bal + int(current_bid), current_bidder_id),
+            )
+
+        # Update auction price and top bidder
+        conn.execute(
+            "UPDATE auctions SET current_bid=?, current_bidder_id=? WHERE id=?",
+            (amount, bidder_id, auction_id),
+        )
+        conn.execute(
+            "INSERT INTO auction_bids(auction_id, bidder_id, amount, created_at) VALUES(?, ?, ?, ?)",
+            (auction_id, bidder_id, amount, now),
+        )
+        return amount, bidder_id
+
+
+def finalize_due_auctions(max_to_close: int = 50) -> int:
+    """Finalize auctions whose end_at has passed.
+
+    Returns number of auctions closed.
+    """
+    now = int(_time.time())
+    closed = 0
+    with get_conn() as conn:
+        # fetch a batch to avoid long locks
+        cur = conn.execute(
+            "SELECT id, seller_id, name, emoji, qty, current_bid, current_bidder_id FROM auctions WHERE status='open' AND end_at <= ? LIMIT ?",
+            (now, max_to_close),
+        )
+        rows = cur.fetchall()
+        for (aid, seller_id, name, emoji, qty, current_bid, current_bidder_id) in rows:
+            conn.execute("BEGIN IMMEDIATE")
+            # Recheck status for this row
+            cur2 = conn.execute(
+                "SELECT status, current_bid, current_bidder_id FROM auctions WHERE id=?",
+                (aid,),
+            )
+            st, cb, cbid = cur2.fetchone()
+            if st != 'open':
+                continue
+            # If no bids, return item to seller
+            if cbid is None or cb is None:
+                # return items to seller
+                # upsert inventory
+                conn.execute(
+                    """
+                    INSERT INTO inventory(user_id, item_id, qty)
+                    SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
+                    ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
+                    """,
+                    (seller_id, qty, name, emoji),
+                )
+                conn.execute(
+                    "UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?",
+                    (aid,),
+                )
+                closed += 1
+                continue
+            # There is a winner: give item to winner, pay seller
+            # Give item
+            conn.execute(
+                """
+                INSERT INTO inventory(user_id, item_id, qty)
+                SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
+                ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
+                """,
+                (cbid, qty, name, emoji),
+            )
+            # Pay seller (funds already deducted from winner; now credit seller)
+            cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
+            row = cur3.fetchone()
+            seller_bal = int(row[0]) if row else DEFAULT_BALANCE
+            if row is None:
+                conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (seller_id, seller_bal))
+            conn.execute(
+                "UPDATE balances SET balance=? WHERE user_id=?",
+                (seller_bal + int(cb), seller_id),
+            )
+            conn.execute(
+                "UPDATE auctions SET status='closed', winner_id=?, winning_bid=? WHERE id=?",
+                (cbid, cb, aid),
+            )
+            closed += 1
+    return closed
 
 
 # ----------------------

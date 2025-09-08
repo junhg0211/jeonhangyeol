@@ -105,6 +105,31 @@ class AutoTransfer(commands.Cog):
                 db.mark_auto_transfer_run(auto_id, True, None, today)
             except Exception as e:
                 db.mark_auto_transfer_run(auto_id, False, str(e), None)
+                # 실패 알림: 보낸 사람에게 DM, 실패 시 알림 채널로
+                try:
+                    guild = self.bot.get_guild(gid)
+                    sender = guild.get_member(frm) if guild else None
+                    recipient = guild.get_member(to) if guild else None
+                    rname = recipient.display_name if recipient else f"<@{to}>"
+                    msg = f"자동이체 실패: {rname}에게 {amount:,}원 전송하지 못했습니다.\n사유: {str(e)}"
+                    if sender:
+                        try:
+                            await sender.send(msg)
+                            continue
+                        except Exception:
+                            pass
+                    # DM 실패 시 알림 채널로
+                    ch_id = db.get_notify_channel(gid)
+                    if ch_id:
+                        ch = self.bot.get_channel(ch_id)
+                        if isinstance(ch, (discord.TextChannel, discord.Thread)):
+                            try:
+                                prefix = sender.mention + "\n" if sender else ""
+                                await ch.send(prefix + msg)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
     @runner.before_loop
     async def before_runner(self):
@@ -119,4 +144,3 @@ class AutoTransfer(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AutoTransfer(bot))
-

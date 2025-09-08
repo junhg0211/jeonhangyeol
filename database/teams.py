@@ -195,6 +195,106 @@ def delete_empty_ancestors(guild_id: int, team_id: int) -> int:
     return deleted
 
 
+def delete_team_path_atomic(guild_id: int, path: str) -> tuple[int, int]:
+    """Atomically clear memberships under a team path and remove empty team nodes.
+
+    Returns (cleared_memberships, removed_team_nodes).
+    """
+    tokens = [t for t in (path or "").split() if t]
+    if not tokens:
+        return (0, 0)
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # find root
+        row = conn.execute(
+            "SELECT id FROM teams WHERE guild_id=? AND name=? AND parent_id IS NULL",
+            (guild_id, TEAM_ROOT_NAME),
+        ).fetchone()
+        if not row:
+            return (0, 0)
+        parent = int(row[0])
+        for tok in tokens:
+            child = conn.execute(
+                "SELECT id FROM teams WHERE guild_id=? AND name=? AND parent_id=?",
+                (guild_id, tok, parent),
+            ).fetchone()
+            if not child:
+                return (0, 0)
+            parent = int(child[0])
+        target_id = parent
+
+        # collect subtree ids
+        ids: list[int] = []
+        to_visit = [target_id]
+        while to_visit:
+            cur = to_visit.pop()
+            ids.append(cur)
+            rows = conn.execute(
+                "SELECT id FROM teams WHERE guild_id=? AND parent_id=?",
+                (guild_id, cur),
+            ).fetchall()
+            to_visit.extend(int(r[0]) for r in rows)
+
+        # clear memberships
+        q = ",".join(["?"] * len(ids))
+        cur = conn.execute(
+            f"DELETE FROM user_teams WHERE guild_id=? AND team_id IN ({q})",
+            (guild_id, *ids),
+        )
+        cleared = cur.rowcount or 0
+
+        # if subtree now has zero members, delete subtree team nodes
+        exists = conn.execute(
+            f"SELECT 1 FROM user_teams WHERE guild_id=? AND team_id IN ({q}) LIMIT 1",
+            (guild_id, *ids),
+        ).fetchone()
+        removed = 0
+        if not exists:
+            cur = conn.execute(
+                f"DELETE FROM teams WHERE guild_id=? AND id IN ({q})",
+                (guild_id, *ids),
+            )
+            removed += cur.rowcount or 0
+
+        # prune empty ancestors (no children, no members)
+        # climb from parent of target_id
+        row = conn.execute("SELECT parent_id FROM teams WHERE guild_id=? AND id=?", (guild_id, target_id)).fetchone()
+        ancestor = int(row[0]) if row and row[0] is not None else None
+        while ancestor is not None:
+            row = conn.execute("SELECT name, parent_id FROM teams WHERE guild_id=? AND id=?", (guild_id, ancestor)).fetchone()
+            if not row:
+                break
+            name, parent_id = str(row[0]), (int(row[1]) if row[1] is not None else None)
+            if name == TEAM_ROOT_NAME:
+                break
+            # has children?
+            c = conn.execute("SELECT 1 FROM teams WHERE guild_id=? AND parent_id=? LIMIT 1", (guild_id, ancestor)).fetchone()
+            if c:
+                break
+            # any members under this node?
+            # gather descendants for this ancestor quickly
+            sub_ids: list[int] = []
+            stack = [ancestor]
+            while stack:
+                curid = stack.pop()
+                sub_ids.append(curid)
+                rows = conn.execute("SELECT id FROM teams WHERE guild_id=? AND parent_id=?", (guild_id, curid)).fetchall()
+                stack.extend(int(r[0]) for r in rows)
+            q2 = ",".join(["?"] * len(sub_ids))
+            has_member = conn.execute(
+                f"SELECT 1 FROM user_teams WHERE guild_id=? AND team_id IN ({q2}) LIMIT 1",
+                (guild_id, *sub_ids),
+            ).fetchone()
+            if has_member:
+                break
+            # safe to delete this ancestor
+            conn.execute("DELETE FROM teams WHERE guild_id=? AND id=?", (guild_id, ancestor))
+            removed += 1
+            ancestor = parent_id
+
+        return (cleared, removed)
+
+
 def team_subtree_has_members(guild_id: int, team_id: int) -> bool:
     """Return True if any user is assigned to the given team or its descendants."""
     with get_conn() as conn:
@@ -329,7 +429,7 @@ __all__ = [
     'ensure_team_path','set_user_team','clear_user_team','list_teams','list_team_members',
     'count_team_members','count_team_subtree_members',
     'get_user_team_id','get_team_path_names','set_rank_roles','get_rank_roles',
-    'find_team_by_path','get_descendant_team_ids','clear_membership_subtree','delete_empty_ancestors',
+    'find_team_by_path','get_descendant_team_ids','clear_membership_subtree','delete_empty_ancestors','delete_team_path_atomic',
 ]
 
 # ---------------- Inventory-based team API (new preferred implementation) ----------------

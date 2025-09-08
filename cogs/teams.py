@@ -130,17 +130,7 @@ class Teams(commands.Cog):
         if team_id is None:
             await interaction.followup.send("해당 경로의 팀이 존재하지 않습니다.", ephemeral=True)
             return
-        cleared = db.clear_membership_subtree(interaction.guild.id, team_id)
-        # 팀/하위 팀에 더 이상 인원이 없다면 팀 노드도 삭제
-        removed = 0
-        parent_for_prune = db.get_team_parent(interaction.guild.id, team_id)
-        try:
-            if not db.team_subtree_has_members(interaction.guild.id, team_id):
-                removed = db.delete_team_subtree(interaction.guild.id, team_id)
-                # 상위 빈 팀도 정리
-                removed += db.delete_empty_ancestors(interaction.guild.id, team_id)
-        except Exception:
-            pass
+        cleared, removed = db.delete_team_path_atomic(interaction.guild.id, path_norm)
         extra = f", 팀 노드 {removed}개 삭제" if removed > 0 else ""
         await interaction.followup.send(f"삭제 완료: 소속 해제 {cleared}명 (팀 '{path_norm}' 및 하위){extra}", ephemeral=True)
 

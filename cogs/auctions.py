@@ -72,6 +72,16 @@ class Auctions(commands.Cog):
         except Exception:
             pass
 
+        # 특허 아이템의 시작가는 특허 출원가로 고정
+        try:
+            if db.is_patent_item_name(name) and interaction.guild:
+                word = name.split(":", 1)[1] if ":" in name else name
+                p = db.get_patent_price(interaction.guild.id, word)
+                if p is not None:
+                    시작가 = int(p)
+        except Exception:
+            pass
+
         await interaction.response.defer(ephemeral=True)
         try:
             auction_id = db.create_auction(
@@ -311,12 +321,21 @@ class Auctions(commands.Cog):
             if qty <= 0:
                 continue
             try:
+                sp = 1
+                try:
+                    if db.is_patent_item_name(name):
+                        w = name.split(":", 1)[1] if ":" in name else name
+                        pp = db.get_patent_price(member.guild.id, w) if member.guild else None
+                        if pp is not None:
+                            sp = int(pp)
+                except Exception:
+                    pass
                 db.create_auction(
                     seller_id=member.id,
                     name=name,
                     emoji=emoji,
                     qty=qty,
-                    start_price=1,
+                    start_price=sp,
                     duration_seconds=30 * 24 * 3600,
                     guild_id=member.guild.id if member.guild else None,
                 )
@@ -339,7 +358,7 @@ class Auctions(commands.Cog):
                         name=f"특허:{word}",
                         emoji="📜",
                         qty=1,
-                        start_price=1,
+                        start_price=int(price),
                         duration_seconds=30 * 24 * 3600,
                         guild_id=gid,
                     )

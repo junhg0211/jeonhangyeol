@@ -847,6 +847,17 @@ def mark_patent_auctioned(patent_id: int) -> None:
         conn.execute("UPDATE patents SET auctioned=1 WHERE id=?", (int(patent_id),))
 
 
+def get_patent_price(guild_id: int, word: str) -> int | None:
+    key = (word or "").strip().casefold()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT price FROM patents WHERE guild_id=? AND word=?",
+            (guild_id, key),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+
+
 def list_patents(guild_id: int):
     with get_conn() as conn:
         cur = conn.execute(

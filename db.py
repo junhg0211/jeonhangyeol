@@ -766,14 +766,16 @@ def get_index_info(guild_id: int, date_kst: str, category: str) -> tuple[float, 
 # ----------------------
 
 INSTRUMENTS_DEFAULT = [
-    ("ETF_CHAT", "채팅 ETF", "ETF", "chat"),
-    ("ETF_VOICE", "통화 ETF", "ETF", "voice"),
-    ("ETF_REACT", "반응 ETF", "ETF", "react"),
-    ("ETF_ALL", "종합 ETF", "ETF", "all"),
-    # IDX_*는 ETF_*로 통합. 기존 데이터 호환을 위해 남겨두되, 신규 노출은 하지 않습니다.
+    # Canonical: 지수 3종 + 종합 ETF
     ("IDX_CHAT", "채팅 지수", "INDEX", "chat"),
     ("IDX_VOICE", "통화 지수", "INDEX", "voice"),
     ("IDX_REACT", "반응 지수", "INDEX", "react"),
+    ("ETF_ALL", "종합 ETF", "ETF", "all"),
+    # Back-compat: 예전 심볼도 등록만 유지(내부적으로 정규화하여 처리)
+    ("ETF_CHAT", "채팅 ETF", "ETF", "chat"),
+    ("ETF_VOICE", "통화 ETF", "ETF", "voice"),
+    ("ETF_REACT", "반응 ETF", "ETF", "react"),
+    ("IDX_ALL", "종합 지수", "INDEX", "all"),
 ]
 
 
@@ -793,14 +795,11 @@ def is_trading_time_kst(ts: int | None = None) -> bool:
 
 
 INSTRUMENT_ITEM_MAP: dict[str, tuple[str, str]] = {
-    # symbol: (emoji, name)
-    "ETF_CHAT": ("📈", "ETF_CHAT"),
-    "ETF_VOICE": ("🗣️", "ETF_VOICE"),
-    "ETF_REACT": ("✨", "ETF_REACT"),
+    # symbol: (emoji, inventory item name)
+    "IDX_CHAT": ("📈", "IDX_CHAT"),
+    "IDX_VOICE": ("🗣️", "IDX_VOICE"),
+    "IDX_REACT": ("✨", "IDX_REACT"),
     "ETF_ALL": ("📊", "ETF_ALL"),
-    "IDX_CHAT": ("🧮", "IDX_CHAT"),
-    "IDX_VOICE": ("🎙️", "IDX_VOICE"),
-    "IDX_REACT": ("💫", "IDX_REACT"),
 }
 
 
@@ -821,12 +820,15 @@ def is_instrument_item_name(name: str) -> bool:
 
 def normalize_symbol(symbol: str) -> str:
     s = (symbol or "").upper()
-    if s == "IDX_CHAT":
-        return "ETF_CHAT"
-    if s == "IDX_VOICE":
-        return "ETF_VOICE"
-    if s == "IDX_REACT":
-        return "ETF_REACT"
+    # Canonical: IDX_CHAT/IDX_VOICE/IDX_REACT, ETF_ALL
+    if s == "ETF_CHAT":
+        return "IDX_CHAT"
+    if s == "ETF_VOICE":
+        return "IDX_VOICE"
+    if s == "ETF_REACT":
+        return "IDX_REACT"
+    if s == "IDX_ALL":
+        return "ETF_ALL"
     return s
 
 
@@ -1119,15 +1121,17 @@ def trade_sell(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int,
 
 
 def list_instrument_holdings(user_id: int):
-    """Return list of (symbol, qty) for instruments stored in inventory."""
+    """Return list of (symbol, qty) for instruments stored in inventory.
+
+    Recognises IDX_* and legacy ETF_* item names; returns canonical symbols (IDX_* or ETF_ALL).
+    """
     items = list_inventory(user_id)
-    # reverse map by item name
-    name_to_symbol = {name: sym for sym, (emo, name) in INSTRUMENT_ITEM_MAP.items()}
     out = []
     for emoji, name, qty in items:
-        sym = name_to_symbol.get(name)
-        if sym and qty > 0:
-            out.append((sym, qty))
+        if not qty:
+            continue
+        if isinstance(name, str) and (name.startswith("IDX_") or name.startswith("ETF_")):
+            out.append((normalize_symbol(name), qty))
     return out
 
 

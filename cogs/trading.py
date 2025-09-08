@@ -24,7 +24,7 @@ SYMBOLS = [
     ("IDX_CHAT", "채팅 지수"),
     ("IDX_VOICE", "통화 지수"),
     ("IDX_REACT", "반응 지수"),
-    ("IDX_ALL", "종합 지수"),
+    ("ETF_ALL", "종합 ETF"),
 ]
 
 

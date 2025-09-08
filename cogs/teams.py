@@ -56,6 +56,14 @@ class Teams(commands.Cog):
         # Inventory-based: build from user paths
         uid_to_path = db.inv_team_all_user_paths(interaction.guild.id)
         if not uid_to_path:
+            # Fallback migration from legacy tables if present
+            try:
+                migrated = db.inv_team_migrate_from_tables(interaction.guild.id)
+                if migrated:
+                    uid_to_path = db.inv_team_all_user_paths(interaction.guild.id)
+            except Exception:
+                pass
+        if not uid_to_path:
             await interaction.response.send_message("등록된 팀이 없습니다.", ephemeral=True)
             return
         # Build map: path -> [user_ids]
@@ -109,11 +117,11 @@ class Teams(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
-        try:
-            prefix = db.ensure_team_path(interaction.guild.id, 경로)
-        except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
+        tokens = [t for t in (경로 or "").split() if t]
+        if not tokens:
+            await interaction.response.send_message("팀 경로가 비어 있습니다.", ephemeral=True)
             return
+        prefix = " ".join(tokens)
         uid_to_path = db.inv_team_all_user_paths(interaction.guild.id)
         targets = [uid for uid, p in uid_to_path.items() if p == prefix or p.startswith(prefix + " ")]
         if not targets:

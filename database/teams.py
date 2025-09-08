@@ -341,3 +341,32 @@ def inv_team_all_user_paths(guild_id: int) -> dict[int, str]:
             if len(parts) >= 3:
                 res[int(uid)] = parts[2]
     return res
+
+
+def inv_team_migrate_from_tables(guild_id: int) -> int:
+    """Best-effort migration from legacy teams tables to inventory items.
+
+    Returns number of users migrated. Safe to run multiple times.
+    """
+    migrated = 0
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT user_id, team_id FROM user_teams WHERE guild_id=?",
+                (guild_id,),
+            ).fetchall()
+            for uid, tid in rows:
+                try:
+                    path_names = get_team_path_names(guild_id, int(tid))
+                    if not path_names:
+                        continue
+                    path = " ".join(path_names)
+                    inv_team_set_user_path(guild_id, int(uid), path)
+                    migrated += 1
+                except Exception:
+                    continue
+            if migrated:
+                conn.execute("DELETE FROM user_teams WHERE guild_id=?", (guild_id,))
+    except Exception:
+        pass
+    return migrated

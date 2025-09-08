@@ -25,6 +25,7 @@ class ActivityIndex(commands.Cog):
         self.NEW_HIGH_STEP = 0.005  # announce new high if > last high by 0.5%
         self.ALERT_COOLDOWN = 600.0  # seconds
         # start loop in on_ready
+        self._alerts_enabled_at: float = 0.0
 
     # ---------- helpers ----------
     def _g(self, guild_id: int) -> dict:
@@ -183,6 +184,9 @@ class ActivityIndex(commands.Cog):
                     to_send.append(("new_high", f"{cat.upper()} 지수 신고점 경신: {new_val:.2f}", 0xf1c40f))
 
                 if to_send:
+                    # suppress alerts during warm-up window after bot start
+                    if time.time() < getattr(self, '_alerts_enabled_at', 0.0):
+                        continue
                     ch_id = db.get_notify_channel(guild.id)
                     if ch_id:
                         ch = self.bot.get_channel(ch_id)
@@ -218,6 +222,8 @@ class ActivityIndex(commands.Cog):
     async def on_ready(self):
         if not self.minute_tick.is_running():
             self.minute_tick.start()
+        # enable alerts 120s after boot
+        self._alerts_enabled_at = time.time() + 120.0
 
     # 간단 조회: /지수 확인
     group = app_commands.Group(name="지수", description="활동 지수")

@@ -155,10 +155,16 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
-                auction_channel_id INTEGER
+                auction_channel_id INTEGER,
+                index_alerts_enabled INTEGER
             );
             """
         )
+        # Migrations for guild_settings
+        try:
+            conn.execute("ALTER TABLE guild_settings ADD COLUMN index_alerts_enabled INTEGER")
+        except Exception:
+            pass
         # 아이템 마스터 테이블 (이모지+이름으로 유니크)
         conn.execute(
             """
@@ -390,6 +396,23 @@ KST = ZoneInfo("Asia/Seoul")
 def _today_kst(dt_utc: float | None = None) -> str:
     dt = datetime.fromtimestamp(dt_utc, KST) if dt_utc is not None else datetime.now(KST)
     return dt.strftime("%Y-%m-%d")
+
+
+def set_index_alerts_enabled(guild_id: int, enabled: bool) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_settings(guild_id, index_alerts_enabled) VALUES(?, ?)\n             ON CONFLICT(guild_id) DO UPDATE SET index_alerts_enabled=excluded.index_alerts_enabled",
+            (guild_id, 1 if enabled else 0),
+        )
+
+
+def get_index_alerts_enabled(guild_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("SELECT index_alerts_enabled FROM guild_settings WHERE guild_id=?", (guild_id,))
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return False
+        return bool(int(row[0]))
 
 
 def ensure_indices_for_day(guild_id: int, date_kst: str | None = None) -> None:

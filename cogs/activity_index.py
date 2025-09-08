@@ -184,6 +184,9 @@ class ActivityIndex(commands.Cog):
                     to_send.append(("new_high", f"{cat.upper()} 지수 신고점 경신: {new_val:.2f}", 0xf1c40f))
 
                 if to_send:
+                    # server-level switch: send only if enabled
+                    if not db.get_index_alerts_enabled(guild.id):
+                        continue
                     # suppress alerts during warm-up window after bot start
                     if time.time() < getattr(self, '_alerts_enabled_at', 0.0):
                         continue

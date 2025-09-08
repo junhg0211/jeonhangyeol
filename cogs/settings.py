@@ -29,7 +29,20 @@ class Settings(commands.Cog):
         else:
             await interaction.response.send_message("알림 채널 설정을 해제했습니다.", ephemeral=True)
 
+    @group.command(name="지수알림", description="활동 지수 알림을 켜거나 끕니다.")
+    @app_commands.describe(상태="켜기(True)/끄기(False)")
+    @app_commands.default_permissions(manage_guild=True)
+    async def toggle_index_alerts(self, interaction: discord.Interaction, 상태: bool):
+        if not interaction.guild:
+            await interaction.response.send_message("서버 내에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+        try:
+            db.set_index_alerts_enabled(interaction.guild.id, 상태)
+        except Exception as e:
+            await interaction.response.send_message(f"설정 중 오류: {e}", ephemeral=True)
+            return
+        await interaction.response.send_message(f"활동 지수 알림이 {'켜짐' if 상태 else '꺼짐'}으로 설정되었습니다.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Settings(bot))
-

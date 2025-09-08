@@ -157,7 +157,11 @@ class Teams(commands.Cog):
                 for uid in members:
                     m = interaction.guild.get_member(uid)
                     if m:
-                        member_names.append(m.display_name)
+                        try:
+                            base = self._extract_base_name(m.display_name)
+                        except Exception:
+                            base = m.display_name
+                        member_names.append(base)
                 indent = "  " * depth
                 if member_names:
                     lines.append(f"{indent}• {name} — 총 {total_cnt}명 (자체 {len(member_names)}명): {', '.join(member_names)}")

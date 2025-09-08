@@ -21,13 +21,10 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 SYMBOLS = [
-    ("ETF_CHAT", "채팅 ETF"),
-    ("ETF_VOICE", "통화 ETF"),
-    ("ETF_REACT", "반응 ETF"),
-    ("ETF_ALL", "종합 ETF"),
     ("IDX_CHAT", "채팅 지수"),
     ("IDX_VOICE", "통화 지수"),
     ("IDX_REACT", "반응 지수"),
+    ("IDX_ALL", "종합 지수"),
 ]
 
 
@@ -307,16 +304,15 @@ class Trading(commands.Cog):
         sec = {"분": 60, "시간": 3600, "일": 86400, "주": 604800}[단위]
         since = now - sec * (count + 10)
         # 데이터 소스 분기: ETF_* 는 etf_ticks, IDX_* 는 activity_ticks
-        if 종목.startswith("ETF_"):
-            rows = db.get_etf_ticks_since(interaction.guild.id, 종목, since)
-        elif 종목 == "IDX_CHAT":
-            rows = db.get_index_ticks_since(interaction.guild.id, "chat", since)
-        elif 종목 == "IDX_VOICE":
-            rows = db.get_index_ticks_since(interaction.guild.id, "voice", since)
-        elif 종목 == "IDX_REACT":
-            rows = db.get_index_ticks_since(interaction.guild.id, "react", since)
-        else:
-            rows = []
+        # 통합: IDX_* 심볼은 ETF_*로 취급
+        if 종목.startswith("IDX_"):
+            mapping = {
+                "IDX_CHAT": "ETF_CHAT",
+                "IDX_VOICE": "ETF_VOICE",
+                "IDX_REACT": "ETF_REACT",
+            }
+            종목 = mapping.get(종목.upper(), 종목)
+        rows = db.get_etf_ticks_since(interaction.guild.id, 종목, since)
         if not rows:
             await interaction.followup.send("차트 데이터가 부족합니다.", ephemeral=True)
             return

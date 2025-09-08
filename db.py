@@ -770,6 +770,7 @@ INSTRUMENTS_DEFAULT = [
     ("ETF_VOICE", "통화 ETF", "ETF", "voice"),
     ("ETF_REACT", "반응 ETF", "ETF", "react"),
     ("ETF_ALL", "종합 ETF", "ETF", "all"),
+    # IDX_*는 ETF_*로 통합. 기존 데이터 호환을 위해 남겨두되, 신규 노출은 하지 않습니다.
     ("IDX_CHAT", "채팅 지수", "INDEX", "chat"),
     ("IDX_VOICE", "통화 지수", "INDEX", "voice"),
     ("IDX_REACT", "반응 지수", "INDEX", "react"),
@@ -804,6 +805,7 @@ INSTRUMENT_ITEM_MAP: dict[str, tuple[str, str]] = {
 
 
 def instrument_item(symbol: str) -> tuple[str, str]:
+    symbol = normalize_symbol(symbol)
     if symbol not in INSTRUMENT_ITEM_MAP:
         raise ValueError("Unknown symbol")
     return INSTRUMENT_ITEM_MAP[symbol]
@@ -815,6 +817,17 @@ def instrument_item_names() -> set[str]:
 
 def is_instrument_item_name(name: str) -> bool:
     return name in instrument_item_names()
+
+
+def normalize_symbol(symbol: str) -> str:
+    s = (symbol or "").upper()
+    if s == "IDX_CHAT":
+        return "ETF_CHAT"
+    if s == "IDX_VOICE":
+        return "ETF_VOICE"
+    if s == "IDX_REACT":
+        return "ETF_REACT"
+    return s
 
 
 def is_patent_item_name(name: str) -> bool:
@@ -1031,6 +1044,7 @@ def get_user_patent_logs(guild_id: int, user_id: int, limit: int = 20):
 
 
 def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:
+    symbol = normalize_symbol(symbol)
     date_kst = _today_kst(ts)
     if symbol == "ETF_CHAT":
         cur, _, _ = get_index_bounds(guild_id, date_kst, "chat")
@@ -1046,15 +1060,6 @@ def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float
         c2, _, _ = get_index_bounds(guild_id, date_kst, "voice")
         c3, _, _ = get_index_bounds(guild_id, date_kst, "react")
         return (c1 + c2 + c3) / 3.0
-    if symbol == "IDX_CHAT":
-        cur, _, _ = get_index_bounds(guild_id, date_kst, "chat")
-        return cur
-    if symbol == "IDX_VOICE":
-        cur, _, _ = get_index_bounds(guild_id, date_kst, "voice")
-        return cur
-    if symbol == "IDX_REACT":
-        cur, _, _ = get_index_bounds(guild_id, date_kst, "react")
-        return cur
     raise ValueError("Unknown symbol")
 
 
@@ -1130,7 +1135,7 @@ def get_last_etf_price(guild_id: int, symbol: str) -> float | None:
     with get_conn() as conn:
         cur = conn.execute(
             "SELECT price FROM etf_ticks WHERE guild_id=? AND symbol=? ORDER BY ts DESC LIMIT 1",
-            (guild_id, symbol),
+            (guild_id, normalize_symbol(symbol)),
         )
         row = cur.fetchone()
         return float(row[0]) if row else None
@@ -1140,7 +1145,7 @@ def record_etf_tick(guild_id: int, ts: int, symbol: str, price: float, delta: fl
     with get_conn() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO etf_ticks(guild_id, ts, symbol, price, delta) VALUES(?, ?, ?, ?, ?)",
-            (guild_id, ts, symbol, float(price), float(delta)),
+            (guild_id, ts, normalize_symbol(symbol), float(price), float(delta)),
         )
 
 
@@ -1148,7 +1153,7 @@ def get_etf_ticks_since(guild_id: int, symbol: str, since_ts: int):
     with get_conn() as conn:
         cur = conn.execute(
             "SELECT ts, price FROM etf_ticks WHERE guild_id=? AND symbol=? AND ts>=? ORDER BY ts ASC",
-            (guild_id, symbol, since_ts),
+            (guild_id, normalize_symbol(symbol), since_ts),
         )
         return [(int(ts), float(px)) for (ts, px) in cur.fetchall()]
 

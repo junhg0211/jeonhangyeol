@@ -146,14 +146,15 @@ class ActivityIndex(commands.Cog):
                 # relative boost vs one hour ago (5-min window sums)
                 REL_WIN = 300
                 REL_GAP = 3600
-                REL_BETA = 0.5
+                REL_BETA = 0.8  # 높인 상승 가중 민감도(기존 0.5)
                 cur_s = db.get_activity_totals(guild.id, cat, ts - REL_WIN, ts)
                 prev_s = db.get_activity_totals(guild.id, cat, ts - REL_GAP - REL_WIN, ts - REL_GAP)
                 cur_w = a * cur_s[0] + b * cur_s[1] + c * cur_s[2]
                 prev_w = a * prev_s[0] + b * prev_s[1] + c * prev_s[2]
                 ratio = (cur_w + 1.0) / (prev_w + 1.0)
                 rel_factor = 1.0 + REL_BETA * (ratio - 1.0)
-                rel_factor = max(0.8, min(1.2, rel_factor))
+                # 상향 여지 확대(최대 +30%), 하향은 동일(최소 -20%)
+                rel_factor = max(0.8, min(1.3, rel_factor))
 
                 # baseline 1.0 -> neutral; scale factor S tunes volatility
                 S = 8.0

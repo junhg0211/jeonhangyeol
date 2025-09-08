@@ -17,6 +17,13 @@ class ActivityIndex(commands.Cog):
         db.init_db()
         # per-guild minute counters
         self._counters: dict[int, dict] = {}
+        # last alerts to rate-limit notifications: key=(guild_id, category, type)
+        self._last_alert: dict[tuple[int, str, str], float] = {}
+        # dynamic thresholds
+        self.SPIKE_UP = 0.01   # +1% or more in a minute
+        self.SPIKE_DOWN = -0.01  # -1% or less in a minute
+        self.NEW_HIGH_STEP = 0.005  # announce new high if > last high by 0.5%
+        self.ALERT_COOLDOWN = 600.0  # seconds
         # start loop in on_ready
 
     # ---------- helpers ----------
@@ -138,13 +145,13 @@ class ActivityIndex(commands.Cog):
                 S = 8.0
                 change_pct = max(-0.02, min(0.02, (base_score - 1.0) / S))
 
-                # fetch bounds/current
+                # fetch snapshot
                 try:
-                    current, lower, upper = db.get_index_bounds(guild.id, date_kst, cat)
+                    current, lower, upper, prev_high, prev_low, open_idx = db.get_index_info(guild.id, date_kst, cat)
                 except Exception:
                     # ensure and retry once
                     db.ensure_indices_for_day(guild.id, date_kst)
-                    current, lower, upper = db.get_index_bounds(guild.id, date_kst, cat)
+                    current, lower, upper, prev_high, prev_low, open_idx = db.get_index_info(guild.id, date_kst, cat)
 
                 new_val = current * (1.0 + change_pct)
                 if new_val < lower:
@@ -163,6 +170,44 @@ class ActivityIndex(commands.Cog):
                     voice_count=voice_c,
                     date_kst=date_kst,
                 )
+
+                # alerts: spike and new high
+                pct = (new_val - current) / current if current > 0 else 0.0
+                to_send: list[tuple[str, str, int]] = []  # (type, desc, color)
+                if pct >= self.SPIKE_UP:
+                    to_send.append(("spike_up", f"{cat.upper()} 지수가 분 단위로 +{pct*100:.2f}% 상승", 0x2ecc71))
+                elif pct <= self.SPIKE_DOWN:
+                    to_send.append(("spike_down", f"{cat.upper()} 지수가 분 단위로 {pct*100:.2f}% 하락", 0xe74c3c))
+
+                if prev_high is None or new_val > prev_high * (1.0 + self.NEW_HIGH_STEP):
+                    to_send.append(("new_high", f"{cat.upper()} 지수 신고점 경신: {new_val:.2f}", 0xf1c40f))
+
+                if to_send:
+                    ch_id = db.get_notify_channel(guild.id)
+                    if ch_id:
+                        ch = self.bot.get_channel(ch_id)
+                        if isinstance(ch, (discord.TextChannel, discord.Thread)):
+                            for ev_type, desc, color in to_send:
+                                key = (guild.id, cat, ev_type)
+                                last = self._last_alert.get(key, 0.0)
+                                now = time.time()
+                                if ev_type == "new_high":
+                                    # lighter cooldown for new_high
+                                    cooldown = self.ALERT_COOLDOWN / 2
+                                else:
+                                    cooldown = self.ALERT_COOLDOWN
+                                if now - last < cooldown:
+                                    continue
+                                self._last_alert[key] = now
+                                try:
+                                    embed = discord.Embed(title="📣 활동 지수 알림", description=desc, color=color)
+                                    embed.add_field(name="지수", value=f"{new_val:.2f}")
+                                    embed.add_field(name="개장가", value=f"{open_idx:.2f}")
+                                    embed.add_field(name="변동", value=f"{(new_val-open_idx)/open_idx*100:.2f}%")
+                                    embed.set_footer(text=f"카테고리: {cat} • {date_kst}")
+                                    await ch.send(embed=embed)
+                                except Exception:
+                                    pass
 
     @minute_tick.before_loop
     async def before_minute_tick(self):
@@ -203,4 +248,3 @@ class ActivityIndex(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ActivityIndex(bot))
-

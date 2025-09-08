@@ -43,10 +43,21 @@ def init_db():
                 upper_bound REAL NOT NULL,
                 opened_at INTEGER NOT NULL,
                 closed_at INTEGER,
+                high_idx REAL,
+                low_idx REAL,
                 PRIMARY KEY (guild_id, date, category)
             );
             """
         )
+        # Migration for older rows
+        try:
+            conn.execute("ALTER TABLE activity_indices ADD COLUMN high_idx REAL")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE activity_indices ADD COLUMN low_idx REAL")
+        except Exception:
+            pass
         # 분단위 변동 기록
         conn.execute(
             """
@@ -333,10 +344,10 @@ def ensure_indices_for_day(guild_id: int, date_kst: str | None = None) -> None:
             upper = open_idx * 2.0
             conn.execute(
                 """
-                INSERT INTO activity_indices(guild_id, date, category, open_idx, current_idx, lower_bound, upper_bound, opened_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO activity_indices(guild_id, date, category, open_idx, current_idx, lower_bound, upper_bound, opened_at, high_idx, low_idx)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (guild_id, date_kst, c, open_idx, open_idx, lower, upper, now),
+                (guild_id, date_kst, c, open_idx, open_idx, lower, upper, now, open_idx, open_idx),
             )
 
 
@@ -361,8 +372,14 @@ def update_activity_tick(
             (guild_id, ts, date_kst, category, idx_value, delta, chat_count, react_count, voice_count),
         )
         conn.execute(
-            "UPDATE activity_indices SET current_idx=? WHERE guild_id=? AND date=? AND category=?",
-            (idx_value, guild_id, date_kst, category),
+            """
+            UPDATE activity_indices
+            SET current_idx=?,
+                high_idx=CASE WHEN high_idx IS NULL OR ? > high_idx THEN ? ELSE high_idx END,
+                low_idx=CASE WHEN low_idx IS NULL OR ? < low_idx THEN ? ELSE low_idx END
+            WHERE guild_id=? AND date=? AND category=?
+            """,
+            (idx_value, idx_value, idx_value, idx_value, idx_value, guild_id, date_kst, category),
         )
 
 
@@ -377,6 +394,20 @@ def get_index_bounds(guild_id: int, date_kst: str, category: str) -> tuple[float
             raise ValueError("Index not initialised")
         open_idx, lower, upper, current = float(row[0]), float(row[1]), float(row[2]), float(row[3])
         return current, lower, upper
+
+
+def get_index_info(guild_id: int, date_kst: str, category: str) -> tuple[float, float, float, float | None, float | None, float]:
+    """Return (current, lower, upper, high, low, open) for the index."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT current_idx, lower_bound, upper_bound, high_idx, low_idx, open_idx FROM activity_indices WHERE guild_id=? AND date=? AND category=?",
+            (guild_id, date_kst, category),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Index not initialised")
+        current, lower, upper, high, low, open_idx = row
+        return float(current), float(lower), float(upper), (float(high) if high is not None else None), (float(low) if low is not None else None), float(open_idx)
 
 
 # ----------------------

@@ -141,7 +141,21 @@ class ActivityIndex(commands.Cog):
                 if gap < 60.0:
                     gap_bonus = (60.0 - gap) / 60.0  # 0..1
 
-                base_score = a * chat_c + b * react_c + c * voice_c + 0.5 * gap_bonus
+                # Normalize activity to targets so that
+                # - ~1000 msgs/hour (~17/min) → full scale
+                # - 8 people in voice → full scale
+                CHAT_MAX, REACT_MAX, VOICE_MAX = 17.0, 30.0, 8.0
+                x_chat = min(chat_c / CHAT_MAX, 1.0)
+                x_react = min(react_c / REACT_MAX, 1.0)
+                x_voice = min(voice_c / VOICE_MAX, 1.0)
+
+                # Category scaling so full activity tends to reach the ±1%/min clamp
+                if cat == 'voice':
+                    W = 0.11  # voice has no gap bonus typically → slightly higher
+                else:
+                    W = 0.073
+
+                base_score = 1.0 + W * (a * x_chat + b * x_react + c * x_voice + 0.5 * gap_bonus)
 
                 # relative boost vs one hour ago (5-min window sums)
                 REL_WIN = 300
@@ -157,7 +171,7 @@ class ActivityIndex(commands.Cog):
                 rel_factor = max(0.8, min(1.3, rel_factor))
 
                 # baseline 1.0 -> neutral; scale factor S tunes volatility
-                S = 8.0
+                S = 10.0
                 DECAY = 0.001  # 0.1% downward drift per minute
                 change_raw = (base_score - 1.0) / S
                 change_raw *= rel_factor
@@ -291,7 +305,7 @@ class ActivityIndex(commands.Cog):
             "상대 비교: 최근 5분 활동을 1시간 전 같은 구간과 비교하여 더 활발하면 상승 가중(최대 +20~30%), 덜 활발하면 축소(최소 −20%)\n"
             "변동 산식: 변동률 ≈ ((점수−1)/S) × 상대가중 − 0.1% (감쇠), 이후 분당 ±1%로 제한\n"
             "스케일 S: 민감도 조절 계수로, S가 클수록 같은 활동 변화에도 변동률이 작아집니다.\n"
-            "예) S=8일 때, (점수−1)=0.08이면 상대가중/감쇠 전 변동률은 약 +1%입니다. 활동이 두 배로 커지면 대략 +2%지만, 분당 제한(±1%)에 의해 클램프됩니다.\n"
+            "예) S=10일 때, 정규화된 점수 증가가 0.10이면 상대가중/감쇠 전 변동률은 약 +1%입니다. 그 이상이라도 분당 제한(±1%)으로 클램프됩니다.\n"
             "일중 범위: 개장가의 50%~200%로 클램프"
         )
         await interaction.response.send_message(text, ephemeral=True)

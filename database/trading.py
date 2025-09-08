@@ -1,7 +1,8 @@
-from .core import get_conn
+from .core import get_conn, KST
 from .inventory import instrument_item, grant_item, discard_item
-from .activity import get_index_bounds
+from .activity import get_index_bounds, ensure_indices_for_day
 import time
+from datetime import datetime
 
 INSTRUMENTS_DEFAULT = [
     ("IDX_CHAT", "채팅 지수", "INDEX", "chat"),
@@ -28,20 +29,25 @@ def normalize_symbol(symbol: str) -> str:
 
 def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:
     symbol = normalize_symbol(symbol)
-    date_kst = None
+    # Resolve current KST date and ensure indices exist for the day
+    date_kst = datetime.fromtimestamp(ts, KST).strftime("%Y-%m-%d") if ts is not None else datetime.now(KST).strftime("%Y-%m-%d")
+    try:
+        ensure_indices_for_day(guild_id, date_kst)
+    except Exception:
+        pass
     if symbol == "IDX_CHAT":
-        cur, _, _ = get_index_bounds(guild_id, time.time() if ts is None else ts, "chat")
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "chat")
         return cur
     if symbol == "IDX_VOICE":
-        cur, _, _ = get_index_bounds(guild_id, time.time() if ts is None else ts, "voice")
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "voice")
         return cur
     if symbol == "IDX_REACT":
-        cur, _, _ = get_index_bounds(guild_id, time.time() if ts is None else ts, "react")
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "react")
         return cur
     if symbol == "ETF_ALL":
-        c1, _, _ = get_index_bounds(guild_id, time.time() if ts is None else ts, "chat")
-        c2, _, _ = get_index_bounds(guild_id, time.time() if ts is None else ts, "voice")
-        c3, _, _ = get_index_bounds(guild_id, time.time() if ts is None else ts, "react")
+        c1, _, _ = get_index_bounds(guild_id, date_kst, "chat")
+        c2, _, _ = get_index_bounds(guild_id, date_kst, "voice")
+        c3, _, _ = get_index_bounds(guild_id, date_kst, "react")
         return (c1 + c2 + c3) / 3.0
     raise ValueError("Unknown symbol")
 

@@ -162,7 +162,7 @@ class ActivityIndex(commands.Cog):
                 change_raw = (base_score - 1.0) / S
                 change_raw *= rel_factor
                 change_raw -= DECAY
-                change_pct = max(-0.02, min(0.02, change_raw))
+                change_pct = max(-0.01, min(0.01, change_raw))
 
                 # fetch snapshot
                 try:
@@ -289,7 +289,7 @@ class ActivityIndex(commands.Cog):
             "지수: 채팅/통화/반응 3종\n"
             "분당 점수: 카테고리별 가중합(채팅·반응·통화) + 채팅간격 보너스\n"
             "상대 비교: 최근 5분 활동을 1시간 전 같은 구간과 비교하여 더 활발하면 상승 가중(최대 +20%), 덜 활발하면 축소(최소 −20%)\n"
-            "변동 산식: (점수−1)/S 에 상대 가중 적용 후 분당 감쇠 0.1%를 빼고, 최종 ±2%로 제한\n"
+            "변동 산식: (점수−1)/S 에 상대 가중 적용 후 분당 감쇠 0.1%를 빼고, 최종 ±1%로 제한\n"
             "일중 범위: 개장가의 50%~200%로 클램프"
         )
         await interaction.response.send_message(text, ephemeral=True)

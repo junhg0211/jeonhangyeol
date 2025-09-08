@@ -289,24 +289,32 @@ class Teams(commands.Cog):
         await self._apply_member_nick(대상)
         await interaction.response.send_message(f"{대상.mention}님의 직급을 '{직급}'(으)로 설정했습니다.", ephemeral=True)
 
-    @group.command(name="나가기", description="내 팀 소속을 해제합니다.")
-    async def leave_team(self, interaction: discord.Interaction):
+    @group.command(name="나가기", description="팀 소속을 해제합니다(관리자는 대상 지정 가능).")
+    @app_commands.describe(대상="미지정 시 본인")
+    async def leave_team(self, interaction: discord.Interaction, 대상: discord.Member | None = None):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
-        prev_team_id = db.get_user_team_id(interaction.guild.id, interaction.user.id)
+        member = 대상 or interaction.user  # type: ignore
+        # 권한: 본인 허용, 타인은 관리자만
+        is_self = member.id == interaction.user.id
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not is_self and not (perms and (perms.manage_guild or perms.administrator)):
+            await interaction.response.send_message("다른 사용자의 팀 나가기는 관리자만 가능합니다.", ephemeral=True)
+            return
+        prev_team_id = db.get_user_team_id(interaction.guild.id, member.id)
         if prev_team_id is None:
             await interaction.response.send_message("이미 팀에 소속되어 있지 않습니다.", ephemeral=True)
             return
         # 팀 소속 해제
-        db.clear_user_team(interaction.guild.id, interaction.user.id)
+        db.clear_user_team(interaction.guild.id, member.id)
         # 닉네임 원복(접미사 제거)
         try:
             # 강제로 base만 남기기 위해 접미사가 없는 형태로 변경
-            base = self._extract_base_name(interaction.user.display_name)
+            base = self._extract_base_name(member.display_name)
             me = interaction.guild.me  # type: ignore
-            if me and me.guild_permissions.manage_nicknames and interaction.user.top_role < me.top_role:
-                await interaction.user.edit(nick=base, reason="팀 나가기(봇)")
+            if me and me.guild_permissions.manage_nicknames and member.top_role < me.top_role:
+                await member.edit(nick=base, reason="팀 나가기(봇)")
         except Exception:
             pass
         # 빈 팀 정리
@@ -316,7 +324,8 @@ class Teams(commands.Cog):
         except Exception:
             pass
         extra = f" — 빈 팀 {pruned}개 삭제" if pruned > 0 else ""
-        await interaction.response.send_message(f"팀 소속을 해제했습니다.{extra}", ephemeral=True)
+        target_note = f" {member.mention}" if not is_self else ""
+        await interaction.response.send_message(f"팀 소속을 해제했습니다.{target_note}{extra}", ephemeral=True)
 
     # 역할 변경 시 닉네임 자동 반영
     @commands.Cog.listener()

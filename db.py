@@ -671,7 +671,12 @@ def set_user_team(guild_id: int, user_id: int, team_id: int) -> None:
 def list_teams(guild_id: int):
     with get_conn() as conn:
         cur = conn.execute(
-            "SELECT id, name, parent_id FROM teams WHERE guild_id=? ORDER BY parent_id NULLS FIRST, id ASC",
+            """
+            SELECT id, name, parent_id
+            FROM teams
+            WHERE guild_id=?
+            ORDER BY (parent_id IS NOT NULL), COALESCE(parent_id, 0), id ASC
+            """,
             (guild_id,),
         )
         return [(int(i), str(n), (int(p) if p is not None else None)) for (i, n, p) in cur.fetchall()]

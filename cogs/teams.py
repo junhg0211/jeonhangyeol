@@ -32,6 +32,7 @@ class Teams(commands.Cog):
             return
         await interaction.response.send_message(f"{대상.mention}님의 팀이 '{경로}'로 변경되었습니다.", ephemeral=True)
 
+
     @group.command(name="목록", description="팀별 인원 목록을 표시합니다.")
     async def list_teams(self, interaction: discord.Interaction):
         if not interaction.guild:
@@ -78,6 +79,7 @@ class Teams(commands.Cog):
 
         embed = discord.Embed(title="👥 팀 목록", description="\n".join(lines) if lines else "(표시할 팀이 없습니다)", color=discord.Color.purple())
         await interaction.response.send_message(embed=embed)
+
 
 
 async def setup(bot: commands.Bot):

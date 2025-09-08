@@ -53,6 +53,11 @@ class Teams(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
+        # Defer because building the tree can take time
+        try:
+            await interaction.response.defer(thinking=True)
+        except Exception:
+            pass
         # Inventory-based: build from user paths
         uid_to_path = db.inv_team_all_user_paths(interaction.guild.id)
         if not uid_to_path:
@@ -64,7 +69,7 @@ class Teams(commands.Cog):
             except Exception:
                 pass
         if not uid_to_path:
-            await interaction.response.send_message("등록된 팀이 없습니다.", ephemeral=True)
+            await interaction.followup.send("등록된 팀이 없습니다.", ephemeral=True)
             return
         # Build map: path -> [user_ids]
         path_members: dict[str, list[int]] = {}
@@ -108,7 +113,7 @@ class Teams(commands.Cog):
                 lines.append(f"{indent}• {name} — 총 {total_cnt}명")
 
         embed = discord.Embed(title="👥 팀 목록", description="\n".join(lines) if lines else "(표시할 팀이 없습니다)", color=discord.Color.purple())
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @group.command(name="삭제", description="지정한 팀과 하위 팀의 소속을 일괄 해제합니다.")
     @app_commands.describe(경로="예: 이정그룹 이정조주 술부")

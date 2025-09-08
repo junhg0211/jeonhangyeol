@@ -329,7 +329,7 @@ __all__ = [
     'ensure_team_path','set_user_team','clear_user_team','list_teams','list_team_members',
     'count_team_members','count_team_subtree_members',
     'get_user_team_id','get_team_path_names','set_rank_roles','get_rank_roles',
-    'find_team_by_path','get_descendant_team_ids','clear_membership_subtree',
+    'find_team_by_path','get_descendant_team_ids','clear_membership_subtree','delete_empty_ancestors',
 ]
 
 # ---------------- Inventory-based team API (new preferred implementation) ----------------

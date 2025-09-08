@@ -517,6 +517,9 @@ INSTRUMENTS_DEFAULT = [
     ("ETF_VOICE", "통화 ETF", "ETF", "voice"),
     ("ETF_REACT", "반응 ETF", "ETF", "react"),
     ("ETF_ALL", "종합 ETF", "ETF", "all"),
+    ("IDX_CHAT", "채팅 지수", "INDEX", "chat"),
+    ("IDX_VOICE", "통화 지수", "INDEX", "voice"),
+    ("IDX_REACT", "반응 지수", "INDEX", "react"),
 ]
 
 
@@ -551,6 +554,15 @@ def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float
         c2, _, _ = get_index_bounds(guild_id, date_kst, "voice")
         c3, _, _ = get_index_bounds(guild_id, date_kst, "react")
         return (c1 + c2 + c3) / 3.0
+    if symbol == "IDX_CHAT":
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "chat")
+        return cur
+    if symbol == "IDX_VOICE":
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "voice")
+        return cur
+    if symbol == "IDX_REACT":
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "react")
+        return cur
     raise ValueError("Unknown symbol")
 
 

@@ -111,6 +111,8 @@ def place_bid(auction_id: int, bidder_id: int, amount: int):
             raise ValueError("Insufficient funds")
         conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (bal - amount, bidder_id))
         # refund previous top bidder
+        prev_id = current_bidder_id
+        prev_amt = int(current_bid) if current_bid is not None else None
         if current_bidder_id is not None and current_bid is not None:
             cur = conn.execute("SELECT balance FROM balances WHERE user_id=?", (current_bidder_id,))
             rowp = cur.fetchone()
@@ -121,7 +123,7 @@ def place_bid(auction_id: int, bidder_id: int, amount: int):
 
         conn.execute("UPDATE auctions SET current_bid=?, current_bidder_id=? WHERE id=?", (amount, bidder_id, auction_id))
         conn.execute("INSERT INTO auction_bids(auction_id, bidder_id, amount, created_at) VALUES(?, ?, ?, ?)", (auction_id, bidder_id, amount, now))
-        return amount, bidder_id
+        return amount, bidder_id, (int(prev_id) if prev_id is not None else None), (int(prev_amt) if prev_amt is not None else None)
 
 
 def finalize_due_auctions(max_to_close: int = 50) -> int:

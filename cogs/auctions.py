@@ -151,7 +151,7 @@ class Auctions(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         try:
-            new_bid, top_bidder = db.place_bid(경매id, interaction.user.id, 금액)
+            new_bid, top_bidder, prev_bidder, prev_amount = db.place_bid(경매id, interaction.user.id, 금액)
         except ValueError as e:
             await interaction.followup.send(str(e), ephemeral=True)
             return
@@ -162,6 +162,34 @@ class Auctions(commands.Cog):
             color=discord.Color.green(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # 알림 채널로 호가 알림 전송 + 이전 최고가 부른 사람 멘션
+        if interaction.guild:
+            ch_id = db.get_notify_channel(interaction.guild.id)
+            if ch_id:
+                ch = self.bot.get_channel(ch_id)
+                if isinstance(ch, (discord.TextChannel, discord.Thread)):
+                    try:
+                        # 경매 정보 조회
+                        row = db.get_auction(경매id)
+                        # row columns depend on schema; extract safely
+                        # expected order: id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, created_at, end_at, status, winner_id, winning_bid, guild_id
+                        name = row[2] if row and len(row) > 2 else "아이템"
+                        emoji = row[3] if row and len(row) > 3 else ""
+                        qty = row[4] if row and len(row) > 4 else 1
+                        end_at = row[9] if row and len(row) > 9 else int(time.time()) + 3600
+                        mention_prev = f"<@{int(prev_bidder)}>, " if prev_bidder else ""
+                        desc = (
+                            f"경매 ID: `{경매id}`\n"
+                            f"아이템: {emoji} {name} × **{qty}**\n"
+                            f"새 최고가: **{new_bid:,}원** — 입찰자: <@{interaction.user.id}>\n"
+                            + (f"이전 최고가: **{int(prev_amount):,}원** — {mention_prev}환불 완료\n" if prev_bidder and prev_amount is not None else "")
+                            + f"마감: <t:{int(end_at)}:R>"
+                        )
+                        notify = discord.Embed(title="📣 호가 갱신", description=desc, color=discord.Color.blue())
+                        await ch.send(content=(mention_prev if prev_bidder else None), embed=notify)
+                    except Exception:
+                        pass
 
     # 목록: /경매 목록 [검색]
     @auctions.command(name="목록", description="현재 진행중인 경매 목록을 확인합니다.")

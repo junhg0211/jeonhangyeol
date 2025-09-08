@@ -684,6 +684,16 @@ def cancel_patent(guild_id: int, owner_id: int, word: str) -> bool:
     return ok
 
 
+def transfer_patent(guild_id: int, from_id: int, to_id: int, word: str) -> bool:
+    key = (word or "").strip().casefold()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE patents SET owner_id=? WHERE guild_id=? AND owner_id=? AND word=?",
+            (to_id, guild_id, from_id, key),
+        )
+        return cur.rowcount > 0
+
+
 def list_patents(guild_id: int):
     with get_conn() as conn:
         cur = conn.execute(

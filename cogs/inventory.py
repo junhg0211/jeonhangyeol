@@ -112,9 +112,9 @@ class Inventory(commands.Cog):
         if not emo or not name:
             await interaction.response.send_message("잘못된 아이템입니다. 다시 선택하세요.", ephemeral=True)
             return
-        # 투자 종목 아이템 차단
+        # 투자 종목 아이템 차단(특허 아이템은 허용)
         try:
-            if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
+            if db.is_instrument_item_name(name):
                 await interaction.response.send_message("투자 종목 아이템은 양도할 수 없습니다. /투자 명령을 이용해 주세요.", ephemeral=True)
                 return
         except Exception:
@@ -122,6 +122,16 @@ class Inventory(commands.Cog):
 
         await interaction.response.defer()
 
+        # 특허 아이템은 특허 소유권도 함께 이전
+        if db.is_patent_item_name(name):
+            if 수량 != 1:
+                await interaction.followup.send("특허 아이템은 1개 단위로만 이전할 수 있습니다.")
+                return
+            word = name.split(":", 1)[1] if ":" in name else name
+            ok = db.transfer_patent(interaction.guild.id, interaction.user.id, 받는사람.id, word)
+            if not ok:
+                await interaction.followup.send("특허 소유권 이전에 실패했습니다(소유자 아님).")
+                return
         try:
             sender_qty, receiver_qty = db.transfer_item(
                 sender_id=interaction.user.id,
@@ -172,15 +182,40 @@ class Inventory(commands.Cog):
         if not emo or not name:
             await interaction.response.send_message("잘못된 아이템입니다. 다시 선택하세요.", ephemeral=True)
             return
-        # 투자 종목 아이템 차단
+        # 투자 종목 아이템 차단(특허 아이템은 허용)
         try:
-            if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
+            if db.is_instrument_item_name(name):
                 await interaction.response.send_message("투자 종목 아이템은 폐기할 수 없습니다. /투자 매도로 정리해 주세요.", ephemeral=True)
                 return
         except Exception:
             pass
 
         await interaction.response.defer(ephemeral=True)
+
+        # 특허 아이템은 취소 처리 동기화
+        if db.is_patent_item_name(name):
+            if 수량 != 1:
+                await interaction.followup.send("특허 아이템은 1개 단위로만 폐기(취소)할 수 있습니다.", ephemeral=True)
+                return
+            word = name.split(":", 1)[1] if ":" in name else name
+            ok = db.cancel_patent(interaction.guild.id, interaction.user.id, word)
+            if not ok:
+                await interaction.followup.send("해당 특허가 없거나 취소할 수 없습니다.", ephemeral=True)
+                return
+            # 남은 수량 조회
+            rem = 0
+            for e, n, q in db.list_inventory(interaction.user.id):
+                if n == name and e == emo:
+                    rem = q
+                    break
+            embed = discord.Embed(
+                title="📜 특허 취소 완료",
+                description=f"{emo} {name} × 1 특허가 취소되었습니다.",
+                color=discord.Color.red(),
+            )
+            embed.set_footer(text=f"현재 보유 수량: {rem}개")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
 
         try:
             remaining = db.discard_item(interaction.user.id, name, emo, 수량)
@@ -204,9 +239,9 @@ class Inventory(commands.Cog):
         # 최대 25개 제한
         choices = []
         for (emoji, name, qty) in rows[:25]:
-            # 투자 종목 아이템 숨김
+            # 투자 종목 아이템만 숨김
             try:
-                if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
+                if db.is_instrument_item_name(name):
                     continue
             except Exception:
                 pass
@@ -221,9 +256,9 @@ class Inventory(commands.Cog):
         rows = db.list_inventory(user_id, query=current or None)
         choices = []
         for (emoji, name, qty) in rows[:25]:
-            # 투자 종목 아이템 숨김
+            # 투자 종목 아이템만 숨김
             try:
-                if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
+                if db.is_instrument_item_name(name):
                     continue
             except Exception:
                 pass

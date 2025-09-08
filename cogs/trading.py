@@ -149,22 +149,21 @@ class Trading(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
-        pos = db.list_positions(interaction.guild.id, interaction.user.id)
+        pos = db.list_instrument_holdings(interaction.user.id)
         if not pos:
             await interaction.response.send_message("보유 종목이 없습니다.", ephemeral=True)
             return
         lines = []
         total = 0
-        for sym, qty, avg in pos:
+        for sym, qty in pos:
             try:
                 px = db.get_symbol_price(interaction.guild.id, sym)
             except Exception:
                 px = 0.0
             val = int(round(px * qty))
             total += val
-            pnl = (px - avg) * qty
-            lines.append(f"`{sym}` ×{qty} • 평균 {avg:.2f}원 • 현재 {px:.2f}원 • 평가 {val:,}원 • 손익 {pnl:+.2f}")
-        embed = discord.Embed(title="보유 종목", description="\n".join(lines), color=discord.Color.green())
+            lines.append(f"`{sym}` ×{qty} • 현재 {px:.2f}원 • 평가 {val:,}원")
+        embed = discord.Embed(title="보유 종목(인벤토리 기반)", description="\n".join(lines), color=discord.Color.green())
         embed.set_footer(text=f"총 평가금액: {total:,}원")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

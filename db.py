@@ -538,6 +538,24 @@ def is_trading_time_kst(ts: int | None = None) -> bool:
     return (t >= datetime.strptime("09:00", "%H:%M").time()) and (t < datetime.strptime("21:00", "%H:%M").time())
 
 
+INSTRUMENT_ITEM_MAP: dict[str, tuple[str, str]] = {
+    # symbol: (emoji, name)
+    "ETF_CHAT": ("📈", "ETF_CHAT"),
+    "ETF_VOICE": ("🗣️", "ETF_VOICE"),
+    "ETF_REACT": ("✨", "ETF_REACT"),
+    "ETF_ALL": ("📊", "ETF_ALL"),
+    "IDX_CHAT": ("🧮", "IDX_CHAT"),
+    "IDX_VOICE": ("🎙️", "IDX_VOICE"),
+    "IDX_REACT": ("💫", "IDX_REACT"),
+}
+
+
+def instrument_item(symbol: str) -> tuple[str, str]:
+    if symbol not in INSTRUMENT_ITEM_MAP:
+        raise ValueError("Unknown symbol")
+    return INSTRUMENT_ITEM_MAP[symbol]
+
+
 def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:
     date_kst = _today_kst(ts)
     if symbol == "ETF_CHAT":
@@ -582,33 +600,19 @@ def trade_buy(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int, 
             raise ValueError("잔액이 부족합니다.")
         # deduct cash
         conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (bal - notional, user_id))
-        # position upsert and avg cost
-        cur = conn.execute(
-            "SELECT qty, avg_cost FROM positions WHERE guild_id=? AND user_id=? AND symbol=?",
-            (guild_id, user_id, symbol),
-        )
-        row = cur.fetchone()
-        if row:
-            old_qty, avg_cost = int(row[0]), float(row[1])
-            new_qty = old_qty + qty
-            new_avg = ((avg_cost * old_qty) + (price * qty)) / new_qty
-            conn.execute(
-                "UPDATE positions SET qty=?, avg_cost=? WHERE guild_id=? AND user_id=? AND symbol=?",
-                (new_qty, new_avg, guild_id, user_id, symbol),
-            )
-        else:
-            new_qty = qty
-            conn.execute(
-                "INSERT INTO positions(guild_id, user_id, symbol, qty, avg_cost) VALUES(?, ?, ?, ?, ?)",
-                (guild_id, user_id, symbol, qty, price),
-            )
+        # inventory upsert
+        emoji, name = instrument_item(symbol)
+        # Use existing inventory helper via a separate connection-free path
+    # grant_item uses its own transaction; safe to call outside above block
+    new_qty = grant_item(user_id, name, emoji, qty)
+    with get_conn() as conn:
         conn.execute(
             "INSERT INTO trades(ts, guild_id, user_id, symbol, side, qty, price, notional) VALUES(?, ?, ?, ?, 'BUY', ?, ?, ?)",
             (ts, guild_id, user_id, symbol, qty, price, notional),
         )
         # new balance
-        new_bal = bal - notional
-        return new_qty, price, notional, new_bal
+    new_bal = get_balance(user_id)
+    return new_qty, price, notional, new_bal
 
 
 def trade_sell(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int, float, int, int]:
@@ -620,25 +624,11 @@ def trade_sell(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int,
     price = float(get_symbol_price(guild_id, symbol))
     proceeds = int(round(price * qty))
     ts = int(_time.time())
+    # reduce inventory and credit cash
+    emoji, name = instrument_item(symbol)
+    # reduce inventory (raises if insufficient)
+    remaining = discard_item(user_id, name, emoji, qty)
     with get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        cur = conn.execute(
-            "SELECT qty FROM positions WHERE guild_id=? AND user_id=? AND symbol=?",
-            (guild_id, user_id, symbol),
-        )
-        row = cur.fetchone()
-        pos_qty = int(row[0]) if row else 0
-        if pos_qty < qty:
-            raise ValueError("보유 수량이 부족합니다.")
-        new_qty = pos_qty - qty
-        if new_qty == 0:
-            conn.execute("DELETE FROM positions WHERE guild_id=? AND user_id=? AND symbol=?", (guild_id, user_id, symbol))
-        else:
-            conn.execute(
-                "UPDATE positions SET qty=? WHERE guild_id=? AND user_id=? AND symbol=?",
-                (new_qty, guild_id, user_id, symbol),
-            )
-        # credit cash
         bal = _ensure_user(conn, user_id)
         new_bal = bal + proceeds
         conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (new_bal, user_id))
@@ -646,16 +636,20 @@ def trade_sell(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int,
             "INSERT INTO trades(ts, guild_id, user_id, symbol, side, qty, price, notional) VALUES(?, ?, ?, ?, 'SELL', ?, ?, ?)",
             (ts, guild_id, user_id, symbol, qty, price, proceeds),
         )
-        return new_qty, price, proceeds, new_bal
+    return remaining, price, proceeds, new_bal
 
 
-def list_positions(guild_id: int, user_id: int):
-    with get_conn() as conn:
-        cur = conn.execute(
-            "SELECT symbol, qty, avg_cost FROM positions WHERE guild_id=? AND user_id=? ORDER BY symbol",
-            (guild_id, user_id),
-        )
-        return [(str(s), int(q), float(a)) for (s, q, a) in cur.fetchall()]
+def list_instrument_holdings(user_id: int):
+    """Return list of (symbol, qty) for instruments stored in inventory."""
+    items = list_inventory(user_id)
+    # reverse map by item name
+    name_to_symbol = {name: sym for sym, (emo, name) in INSTRUMENT_ITEM_MAP.items()}
+    out = []
+    for emoji, name, qty in items:
+        sym = name_to_symbol.get(name)
+        if sym and qty > 0:
+            out.append((sym, qty))
+    return out
 
 
 def get_last_etf_price(guild_id: int, symbol: str) -> float | None:

@@ -30,6 +30,15 @@ def init_db():
             );
             """
         )
+        # 길드 설정: 경매 알림 채널 등
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                auction_channel_id INTEGER
+            );
+            """
+        )
         # 아이템 마스터 테이블 (이모지+이름으로 유니크)
         conn.execute(
             """
@@ -210,6 +219,36 @@ def rank_page(offset: int, limit: int) -> list[tuple[int, int]]:
             (limit, offset),
         )
         return [(int(uid), int(bal)) for uid, bal in cur.fetchall()]
+
+
+# ----------------------
+# Guild settings APIs
+# ----------------------
+
+def set_auction_channel(guild_id: int, channel_id: int | None) -> None:
+    with get_conn() as conn:
+        if channel_id is None:
+            conn.execute(
+                "INSERT INTO guild_settings(guild_id, auction_channel_id) VALUES(?, NULL)\n                 ON CONFLICT(guild_id) DO UPDATE SET auction_channel_id=NULL",
+                (guild_id,),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO guild_settings(guild_id, auction_channel_id) VALUES(?, ?)\n                 ON CONFLICT(guild_id) DO UPDATE SET auction_channel_id=excluded.auction_channel_id",
+                (guild_id, channel_id),
+            )
+
+
+def get_auction_channel(guild_id: int) -> int | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT auction_channel_id FROM guild_settings WHERE guild_id=?",
+            (guild_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return int(row[0]) if row[0] is not None else None
 
 
 # ----------------------

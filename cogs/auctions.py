@@ -24,6 +24,24 @@ class Auctions(commands.Cog):
 
     auctions = app_commands.Group(name="경매", description="경매 기능")
 
+    # 알림 채널 설정: /경매 채널 [채널]
+    @auctions.command(name="채널", description="경매 시작 알림 채널을 설정/해제합니다.")
+    @app_commands.describe(채널="경매 알림을 보낼 텍스트 채널 (비우면 해제)")
+    @app_commands.default_permissions(manage_guild=True)
+    async def set_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel | None = None):
+        if not interaction.guild:
+            await interaction.response.send_message("서버 내에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+        try:
+            db.set_auction_channel(interaction.guild.id, 채널.id if 채널 else None)
+        except Exception as e:
+            await interaction.response.send_message(f"설정 중 오류: {e}", ephemeral=True)
+            return
+        if 채널:
+            await interaction.response.send_message(f"경매 알림 채널을 {채널.mention}(으)로 설정했습니다.", ephemeral=True)
+        else:
+            await interaction.response.send_message("경매 알림 채널 설정을 해제했습니다.", ephemeral=True)
+
     # 출품: /경매 출품 아이템 수량 시작가 기간(시간)
     @auctions.command(name="출품", description="보유 아이템을 경매에 출품합니다.")
     @app_commands.describe(
@@ -82,6 +100,30 @@ class Auctions(commands.Cog):
             color=discord.Color.gold(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # 설정된 채널로 새 경매 알림 전송
+        if interaction.guild:
+            ch_id = db.get_auction_channel(interaction.guild.id)
+            if ch_id:
+                ch = self.bot.get_channel(ch_id)
+                if isinstance(ch, (discord.TextChannel, discord.Thread)):
+                    try:
+                        notify = discord.Embed(
+                            title="🛎️ 새 경매 시작",
+                            description=(
+                                f"경매 ID: `{auction_id}`\n"
+                                f"아이템: {emoji} {name} × **{수량}**\n"
+                                f"시작가: **{시작가:,}원**\n"
+                                f"마감: <t:{int(time.time()) + 기간시간*3600}:R>"
+                            ),
+                            color=discord.Color.orange(),
+                        )
+                        seller = interaction.guild.get_member(interaction.user.id)
+                        if seller:
+                            notify.set_footer(text=f"출품자: {seller.display_name}")
+                        await ch.send(embed=notify)
+                    except Exception:
+                        pass
 
     # 입찰: /경매 입찰 경매ID 금액
     @auctions.command(name="입찰", description="경매에 입찰합니다(선결제, 자동 환불).")

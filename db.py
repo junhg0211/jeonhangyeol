@@ -61,6 +61,11 @@ def init_db():
             );
             """
         )
+        # schema migration: add guild_id column if missing
+        try:
+            conn.execute("ALTER TABLE auctions ADD COLUMN guild_id INTEGER")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS auction_bids (
@@ -213,7 +218,7 @@ def rank_page(offset: int, limit: int) -> list[tuple[int, int]]:
 import time as _time
 
 
-def create_auction(seller_id: int, name: str, emoji: str, qty: int, start_price: int, duration_seconds: int) -> int:
+def create_auction(seller_id: int, name: str, emoji: str, qty: int, start_price: int, duration_seconds: int, guild_id: int | None = None) -> int:
     """Create an auction by moving items from seller inventory into escrow.
 
     Returns auction id. Raises ValueError on invalid input or insufficient qty.
@@ -257,10 +262,10 @@ def create_auction(seller_id: int, name: str, emoji: str, qty: int, start_price:
 
         cur = conn.execute(
             """
-            INSERT INTO auctions (seller_id, name, emoji, qty, start_price, created_at, end_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open')
+            INSERT INTO auctions (seller_id, name, emoji, qty, start_price, created_at, end_at, status, guild_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
             """,
-            (seller_id, name.strip(), emoji.strip(), qty, start_price, now, end_at),
+            (seller_id, name.strip(), emoji.strip(), qty, start_price, now, end_at, guild_id),
         )
         return int(cur.lastrowid)
 
@@ -271,50 +276,118 @@ def get_auction(auction_id: int):
         return cur.fetchone()
 
 
-def list_open_auctions(offset: int, limit: int, query: str | None = None):
+def list_open_auctions(offset: int, limit: int, query: str | None = None, guild_id: int | None = None):
     limit = max(1, min(int(limit), 50))
     offset = max(0, int(offset))
     with get_conn() as conn:
         if query:
             q = f"%{query.lower()}%"
-            cur = conn.execute(
-                """
-                SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
-                FROM auctions
-                WHERE status='open' AND end_at > ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)
-                ORDER BY end_at ASC
-                LIMIT ? OFFSET ?
-                """,
-                (int(_time.time()), q, q, limit, offset),
-            )
+            if guild_id is not None:
+                cur = conn.execute(
+                    """
+                    SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
+                    FROM auctions
+                    WHERE status='open' AND end_at > ? AND guild_id = ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)
+                    ORDER BY end_at ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(_time.time()), guild_id, q, q, limit, offset),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
+                    FROM auctions
+                    WHERE status='open' AND end_at > ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)
+                    ORDER BY end_at ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(_time.time()), q, q, limit, offset),
+                )
         else:
-            cur = conn.execute(
-                """
-                SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
-                FROM auctions
-                WHERE status='open' AND end_at > ?
-                ORDER BY end_at ASC
-                LIMIT ? OFFSET ?
-                """,
-                (int(_time.time()), limit, offset),
-            )
+            if guild_id is not None:
+                cur = conn.execute(
+                    """
+                    SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
+                    FROM auctions
+                    WHERE status='open' AND end_at > ? AND guild_id = ?
+                    ORDER BY end_at ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(_time.time()), guild_id, limit, offset),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT id, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at
+                    FROM auctions
+                    WHERE status='open' AND end_at > ?
+                    ORDER BY end_at ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(_time.time()), limit, offset),
+                )
         return cur.fetchall()
 
 
-def count_open_auctions(query: str | None = None) -> int:
+def count_open_auctions(query: str | None = None, guild_id: int | None = None) -> int:
     with get_conn() as conn:
         if query:
             q = f"%{query.lower()}%"
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)",
-                (int(_time.time()), q, q),
-            )
+            if guild_id is not None:
+                cur = conn.execute(
+                    "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ? AND guild_id = ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)",
+                    (int(_time.time()), guild_id, q, q),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ? AND (LOWER(name) LIKE ? OR emoji LIKE ?)",
+                    (int(_time.time()), q, q),
+                )
         else:
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ?",
-                (int(_time.time()),),
-            )
+            if guild_id is not None:
+                cur = conn.execute(
+                    "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ? AND guild_id = ?",
+                    (int(_time.time()), guild_id),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT COUNT(*) FROM auctions WHERE status='open' AND end_at > ?",
+                    (int(_time.time()),),
+                )
         return int(cur.fetchone()[0])
+
+def get_auction_guild(aid: int) -> tuple[int | None, int, str]:
+    """Return (guild_id, end_at, status) for an auction."""
+    with get_conn() as conn:
+        cur = conn.execute("SELECT guild_id, end_at, status FROM auctions WHERE id=?", (aid,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Auction not found")
+        gid, end_at, status = row
+        return (int(gid) if gid is not None else None, int(end_at), str(status))
+
+def list_due_unsold_auctions(limit: int = 50):
+    """Return auctions that are due, open, and have no bids."""
+    now = int(_time.time())
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT id, guild_id, seller_id, name, emoji, qty
+            FROM auctions
+            WHERE status='open' AND end_at <= ? AND current_bid IS NULL AND current_bidder_id IS NULL
+            LIMIT ?
+            """,
+            (now, limit),
+        )
+        return cur.fetchall()
+
+def discard_unsold_auction(aid: int) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?",
+            (aid,),
+        )
 
 
 def place_bid(auction_id: int, bidder_id: int, amount: int):

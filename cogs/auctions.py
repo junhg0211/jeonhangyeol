@@ -66,6 +66,7 @@ class Auctions(commands.Cog):
                 qty=수량,
                 start_price=시작가,
                 duration_seconds=기간시간 * 3600,
+                guild_id=interaction.guild.id if interaction.guild else None,
             )
         except ValueError as e:
             await interaction.followup.send(str(e), ephemeral=True)
@@ -89,6 +90,15 @@ class Auctions(commands.Cog):
         if 금액 <= 0:
             await interaction.response.send_message("입찰 금액은 0보다 커야 합니다.", ephemeral=True)
             return
+        # 서버 일치 검사
+        try:
+            gid, end_at, status = db.get_auction_guild(경매id)
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        if gid is not None and interaction.guild and interaction.guild.id != gid:
+            await interaction.response.send_message("이 경매는 현재 서버의 경매가 아닙니다.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         try:
             new_bid, top_bidder = db.place_bid(경매id, interaction.user.id, 금액)
@@ -108,12 +118,13 @@ class Auctions(commands.Cog):
     @app_commands.describe(검색="아이템 이름/이모지 일부", 페이지크기="페이지당 표시(기본 10, 최대 25)")
     async def list_auctions(self, interaction: discord.Interaction, 검색: str | None = None, 페이지크기: int = 10):
         per_page = max(1, min(int(페이지크기), 25))
-        total = db.count_open_auctions(검색 or None)
+        gid = interaction.guild.id if interaction.guild else None
+        total = db.count_open_auctions(검색 or None, guild_id=gid)
         total_pages = max(1, (total + per_page - 1) // per_page)
 
         def build_embed(page: int) -> discord.Embed:
             offset = (page - 1) * per_page
-            rows = db.list_open_auctions(offset, per_page, 검색 or None)
+            rows = db.list_open_auctions(offset, per_page, 검색 or None, guild_id=gid)
             lines = []
             for (aid, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at) in rows:
                 price = current_bid if current_bid is not None else start_price
@@ -139,6 +150,7 @@ class Auctions(commands.Cog):
             "total_pages": total_pages,
             "search": 검색 or "",
             "expires_at": time.monotonic() + 60,
+            "guild_id": gid,
         }
         for emoji in ("⬅️", "➡️"):
             try:
@@ -184,7 +196,7 @@ class Auctions(commands.Cog):
         ctx["page"] = page
         # rebuild
         offset = (page - 1) * per_page
-        rows = db.list_open_auctions(offset, per_page, search or None)
+        rows = db.list_open_auctions(offset, per_page, search or None, guild_id=ctx.get("guild_id"))
         lines = []
         for (aid, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at) in rows:
             price = current_bid if current_bid is not None else start_price
@@ -195,7 +207,7 @@ class Auctions(commands.Cog):
             )
         desc = "\n".join(lines) if lines else "진행중인 경매가 없습니다."
         embed = discord.Embed(title="🏷️ 진행중인 경매", description=desc, color=discord.Color.blurple())
-        total = db.count_open_auctions(search or None)
+        total = db.count_open_auctions(search or None, guild_id=ctx.get("guild_id"))
         total_pages = max(1, (total + per_page - 1) // per_page)
         ctx["total_pages"] = total_pages
         embed.set_footer(text=f"페이지 {page}/{total_pages} • ⬅️ ➡️ • 1분 후 만료")
@@ -217,7 +229,7 @@ class Auctions(commands.Cog):
         per_page = ctx["per_page"]
         search = ctx["search"]
         offset = (page - 1) * per_page
-        rows = db.list_open_auctions(offset, per_page, search or None)
+        rows = db.list_open_auctions(offset, per_page, search or None, guild_id=ctx.get("guild_id"))
         lines = []
         for (aid, seller_id, name, emoji, qty, start_price, current_bid, current_bidder_id, end_at) in rows:
             price = current_bid if current_bid is not None else start_price
@@ -228,7 +240,7 @@ class Auctions(commands.Cog):
             )
         desc = "\n".join(lines) if lines else "진행중인 경매가 없습니다."
         embed = discord.Embed(title="🏷️ 진행중인 경매", description=desc, color=discord.Color.blurple())
-        total = db.count_open_auctions(search or None)
+        total = db.count_open_auctions(search or None, guild_id=ctx.get("guild_id"))
         total_pages = max(1, (total + per_page - 1) // per_page)
         embed.set_footer(text=f"페이지 {page}/{total_pages} • 만료됨")
         try:
@@ -245,9 +257,23 @@ class Auctions(commands.Cog):
     @tasks.loop(seconds=30)
     async def closer(self):
         try:
+            # 1) 서버에서 판매자가 없는 유찰 경매 파기
+            due = db.list_due_unsold_auctions(50)
+            discarded = 0
+            for (aid, guild_id, seller_id, name, emoji, qty) in due:
+                guild = self.bot.get_guild(guild_id) if guild_id else None
+                seller_present = bool(guild and guild.get_member(seller_id))
+                if not seller_present:
+                    try:
+                        db.discard_unsold_auction(aid)
+                        discarded += 1
+                    except Exception:
+                        pass
+
+            # 2) 나머지 경매 일반 규칙으로 정산(낙찰/유찰 반납)
             closed = db.finalize_due_auctions(50)
-            if closed:
-                print(f"[auctions] finalized {closed} auctions")
+            if discarded or closed:
+                print(f"[auctions] finalized={closed} discarded={discarded}")
         except Exception as e:
             print(f"[auctions] closer error: {e}")
 
@@ -258,4 +284,3 @@ class Auctions(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Auctions(bot))
-

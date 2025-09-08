@@ -218,7 +218,8 @@ def init_db():
                 auction_channel_id INTEGER,
                 index_alerts_enabled INTEGER,
                 main_chat_channel_id INTEGER,
-                announce_channel_id INTEGER
+                announce_channel_id INTEGER,
+                rank_role_names TEXT
             );
             """
         )
@@ -227,6 +228,10 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_settings ADD COLUMN {col} INTEGER")
             except Exception:
                 pass
+        try:
+            conn.execute("ALTER TABLE guild_settings ADD COLUMN rank_role_names TEXT")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS announcements (
@@ -361,4 +366,3 @@ def init_db():
         )
 
 __all__ = ['get_conn', 'init_db', 'KST', 'DB_PATH']
-

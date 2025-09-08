@@ -30,6 +30,40 @@ def init_db():
             );
             """
         )
+        # 활동 지수: 일자별 지수 상태
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_indices (
+                guild_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                category TEXT NOT NULL,
+                open_idx REAL NOT NULL,
+                current_idx REAL NOT NULL,
+                lower_bound REAL NOT NULL,
+                upper_bound REAL NOT NULL,
+                opened_at INTEGER NOT NULL,
+                closed_at INTEGER,
+                PRIMARY KEY (guild_id, date, category)
+            );
+            """
+        )
+        # 분단위 변동 기록
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_ticks (
+                guild_id INTEGER NOT NULL,
+                ts INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                category TEXT NOT NULL,
+                idx_value REAL NOT NULL,
+                delta REAL NOT NULL,
+                chat_count INTEGER NOT NULL,
+                react_count INTEGER NOT NULL,
+                voice_count INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, ts, category)
+            );
+            """
+        )
         # 길드 설정: 경매 알림 채널 등
         conn.execute(
             """
@@ -256,6 +290,93 @@ def set_notify_channel(guild_id: int, channel_id: int | None) -> None:
 
 def get_notify_channel(guild_id: int) -> int | None:
     return get_auction_channel(guild_id)
+
+
+# ----------------------
+# Activity index APIs
+# ----------------------
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def _today_kst(dt_utc: float | None = None) -> str:
+    dt = datetime.fromtimestamp(dt_utc, KST) if dt_utc is not None else datetime.now(KST)
+    return dt.strftime("%Y-%m-%d")
+
+
+def ensure_indices_for_day(guild_id: int, date_kst: str | None = None) -> None:
+    """Ensure activity indices exist for categories on the given KST date.
+    If missing, open with previous close (if any) else 100.
+    Bounds: [50%, 200%] of open.
+    """
+    date_kst = date_kst or _today_kst()
+    cats = ("chat", "voice", "react")
+    now = int(_time.time())
+    with get_conn() as conn:
+        for c in cats:
+            cur = conn.execute(
+                "SELECT 1 FROM activity_indices WHERE guild_id=? AND date=? AND category=?",
+                (guild_id, date_kst, c),
+            )
+            if cur.fetchone():
+                continue
+            # previous close
+            curp = conn.execute(
+                "SELECT current_idx FROM activity_indices WHERE guild_id=? AND category=? ORDER BY date DESC LIMIT 1",
+                (guild_id, c),
+            )
+            row = curp.fetchone()
+            open_idx = float(row[0]) if row else 100.0
+            lower = open_idx * 0.5
+            upper = open_idx * 2.0
+            conn.execute(
+                """
+                INSERT INTO activity_indices(guild_id, date, category, open_idx, current_idx, lower_bound, upper_bound, opened_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (guild_id, date_kst, c, open_idx, open_idx, lower, upper, now),
+            )
+
+
+def update_activity_tick(
+    guild_id: int,
+    ts: int,
+    category: str,
+    idx_value: float,
+    delta: float,
+    chat_count: int,
+    react_count: int,
+    voice_count: int,
+    date_kst: str | None = None,
+) -> None:
+    date_kst = date_kst or _today_kst(ts)
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO activity_ticks(guild_id, ts, date, category, idx_value, delta, chat_count, react_count, voice_count)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (guild_id, ts, date_kst, category, idx_value, delta, chat_count, react_count, voice_count),
+        )
+        conn.execute(
+            "UPDATE activity_indices SET current_idx=? WHERE guild_id=? AND date=? AND category=?",
+            (idx_value, guild_id, date_kst, category),
+        )
+
+
+def get_index_bounds(guild_id: int, date_kst: str, category: str) -> tuple[float, float, float]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT open_idx, lower_bound, upper_bound, current_idx FROM activity_indices WHERE guild_id=? AND date=? AND category=?",
+            (guild_id, date_kst, category),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Index not initialised")
+        open_idx, lower, upper, current = float(row[0]), float(row[1]), float(row[2]), float(row[3])
+        return current, lower, upper
 
 
 # ----------------------

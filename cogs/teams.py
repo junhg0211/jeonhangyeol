@@ -28,6 +28,21 @@ class Teams(commands.Cog):
                 return rn
         return None
 
+    def _subtree_has_active_members(self, guild: discord.Guild, root_tid: int, by_parent: dict[int | None, list[tuple[int, str]]]) -> bool:
+        to_visit = [root_tid]
+        while to_visit:
+            cur = to_visit.pop()
+            # direct members filtered by actual guild presence
+            try:
+                for uid in db.list_team_members(guild.id, cur):
+                    if guild.get_member(uid):
+                        return True
+            except Exception:
+                pass
+            for child_id, _ in by_parent.get(cur, []) or []:
+                to_visit.append(child_id)
+        return False
+
     def _build_team_suffix(self, guild: discord.Guild, user_id: int, budget: int, rank: str | None) -> str:
         team_id = db.get_user_team_id(guild.id, user_id)
         names = db.get_team_path_names(guild.id, team_id) if team_id else []
@@ -210,7 +225,8 @@ class Teams(commands.Cog):
             if name == db.TEAM_ROOT_NAME:
                 continue
             try:
-                if not db.team_subtree_has_members(interaction.guild.id, tid):
+                # 실제 길드에 존재하는 멤버 기준으로 비었는지 확인
+                if not self._subtree_has_active_members(interaction.guild, tid, by_parent):
                     deleted += db.delete_team_subtree(interaction.guild.id, tid)
             except Exception:
                 pass

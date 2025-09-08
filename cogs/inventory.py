@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-import db
+import database as db
 import json
 import asyncio
 import time

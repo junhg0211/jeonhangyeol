@@ -3,7 +3,7 @@
 import discord
 from discord import app_commands  # app_commands를 import 합니다.
 from discord.ext import commands
-import db
+import database as db
 import asyncio
 import time
 

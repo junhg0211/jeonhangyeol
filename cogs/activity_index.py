@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 
-import db
+import database as db
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import time

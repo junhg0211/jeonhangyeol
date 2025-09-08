@@ -30,6 +30,33 @@ def init_db():
             );
             """
         )
+        # 자동이체 설정 및 로그
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_transfers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                from_user INTEGER NOT NULL,
+                to_user INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                period_days INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                last_date TEXT,
+                active INTEGER NOT NULL DEFAULT 1
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_transfer_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                auto_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT
+            );
+            """
+        )
         # 출석(Attendance)
         conn.execute(
             """
@@ -467,6 +494,12 @@ def _today_kst(dt_utc: float | None = None) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def _days_between_kst(d1: str, d2: str) -> int:
+    a = datetime.strptime(d1, "%Y-%m-%d").replace(tzinfo=KST)
+    b = datetime.strptime(d2, "%Y-%m-%d").replace(tzinfo=KST)
+    return int((b.date() - a.date()).days)
+
+
 def set_index_alerts_enabled(guild_id: int, enabled: bool) -> None:
     with get_conn() as conn:
         conn.execute(
@@ -567,6 +600,72 @@ def attendance_max_streak_leaderboard(guild_id: int, limit: int = 20):
             (guild_id, int(limit)),
         )
         return [(int(uid), int(ms), int(td)) for (uid, ms, td) in cur.fetchall()]
+
+
+# ----------------------
+# Auto transfer APIs
+# ----------------------
+
+def create_auto_transfer(guild_id: int, from_user: int, to_user: int, amount: int, period_days: int, start_date: str) -> int:
+    if amount <= 0:
+        raise ValueError("금액은 0보다 커야 합니다.")
+    if period_days <= 0 or period_days > 365:
+        raise ValueError("주기는 1~365일 범위여야 합니다.")
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO auto_transfers(guild_id, from_user, to_user, amount, period_days, start_date)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (guild_id, from_user, to_user, int(amount), int(period_days), start_date),
+        )
+        return int(cur.lastrowid)
+
+
+def list_user_auto_transfers(guild_id: int, from_user: int):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, to_user, amount, period_days, start_date, last_date, active FROM auto_transfers WHERE guild_id=? AND from_user=? ORDER BY id DESC",
+            (guild_id, from_user),
+        )
+        return cur.fetchall()
+
+
+def cancel_auto_transfer(guild_id: int, from_user: int, auto_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE auto_transfers SET active=0 WHERE id=? AND guild_id=? AND from_user=? AND active=1",
+            (auto_id, guild_id, from_user),
+        )
+        return cur.rowcount > 0
+
+
+def list_due_auto_transfers(today: str):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, guild_id, from_user, to_user, amount, period_days, start_date, last_date FROM auto_transfers WHERE active=1",
+        )
+        rows = []
+        for id_, gid, frm, to, amt, period, start_date, last_date in cur.fetchall():
+            if start_date > today:
+                continue
+            if last_date == today:
+                continue
+            days = _days_between_kst(start_date, today)
+            if days % int(period) == 0:
+                rows.append((int(id_), int(gid), int(frm), int(to), int(amt)))
+        return rows
+
+
+def mark_auto_transfer_run(auto_id: int, success: bool, message: str | None, today: str | None = None) -> None:
+    now = int(_time.time())
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO auto_transfer_logs(ts, auto_id, status, message) VALUES(?, ?, ?, ?)",
+            (now, int(auto_id), "OK" if success else "ERR", message or None),
+        )
+        if success and today:
+            conn.execute("UPDATE auto_transfers SET last_date=? WHERE id=?", (today, int(auto_id)))
 
 
 def ensure_indices_for_day(guild_id: int, date_kst: str | None = None) -> None:

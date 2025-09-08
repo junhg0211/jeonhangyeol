@@ -84,6 +84,27 @@ def init_db():
             );
             """
         )
+        # 주문(예약)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_ts INTEGER NOT NULL,
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,          -- BUY/SELL
+                qty INTEGER NOT NULL,
+                order_type TEXT NOT NULL,    -- MARKET_OPEN/LIMIT
+                limit_price REAL,
+                status TEXT NOT NULL DEFAULT 'OPEN',  -- OPEN/FILLED/CANCELLED
+                executed_ts INTEGER,
+                executed_price REAL,
+                note TEXT,
+                FOREIGN KEY (symbol) REFERENCES instruments(symbol) ON DELETE CASCADE
+            );
+            """
+        )
         # 활동 지수: 일자별 지수 상태
         conn.execute(
             """
@@ -618,6 +639,89 @@ def record_etf_tick(guild_id: int, ts: int, symbol: str, price: float, delta: fl
             "INSERT OR REPLACE INTO etf_ticks(guild_id, ts, symbol, price, delta) VALUES(?, ?, ?, ?, ?)",
             (guild_id, ts, symbol, float(price), float(delta)),
         )
+
+
+# ----------------------
+# Orders API
+# ----------------------
+
+def create_order_market_open(guild_id: int, user_id: int, symbol: str, side: str, qty: int) -> int:
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    ts = int(_time.time())
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO orders(created_ts, guild_id, user_id, symbol, side, qty, order_type)
+            VALUES(?, ?, ?, ?, ?, ?, 'MARKET_OPEN')
+            """,
+            (ts, guild_id, user_id, symbol, side, qty),
+        )
+        return int(cur.lastrowid)
+
+
+def create_order_limit(guild_id: int, user_id: int, symbol: str, side: str, qty: int, limit_price: float) -> int:
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    if limit_price <= 0:
+        raise ValueError("Limit price must be positive")
+    ts = int(_time.time())
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO orders(created_ts, guild_id, user_id, symbol, side, qty, order_type, limit_price)
+            VALUES(?, ?, ?, ?, ?, ?, 'LIMIT', ?)
+            """,
+            (ts, guild_id, user_id, symbol, side, qty, float(limit_price)),
+        )
+        return int(cur.lastrowid)
+
+
+def list_user_orders(guild_id: int, user_id: int, status: str | None = 'OPEN'):
+    with get_conn() as conn:
+        if status:
+            cur = conn.execute(
+                "SELECT id, symbol, side, qty, order_type, limit_price, status, created_ts FROM orders WHERE guild_id=? AND user_id=? AND status=? ORDER BY id DESC",
+                (guild_id, user_id, status),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT id, symbol, side, qty, order_type, limit_price, status, created_ts FROM orders WHERE guild_id=? AND user_id=? ORDER BY id DESC",
+                (guild_id, user_id),
+            )
+        return cur.fetchall()
+
+
+def list_open_orders_for_guild(guild_id: int):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, user_id, symbol, side, qty, order_type, limit_price FROM orders WHERE guild_id=? AND status='OPEN' ORDER BY id ASC",
+            (guild_id,),
+        )
+        return cur.fetchall()
+
+
+def mark_order_filled(order_id: int, exec_ts: int, exec_price: float):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE orders SET status='FILLED', executed_ts=?, executed_price=? WHERE id=?",
+            (exec_ts, float(exec_price), order_id),
+        )
+
+
+def cancel_order(guild_id: int, user_id: int, order_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT status FROM orders WHERE id=? AND guild_id=? AND user_id=?",
+            (order_id, guild_id, user_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        if str(row[0]) != 'OPEN':
+            return False
+        conn.execute("UPDATE orders SET status='CANCELLED', note='cancelled by user' WHERE id=?", (order_id,))
+        return True
 
 
 # ----------------------

@@ -98,6 +98,15 @@ class Trading(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
+        # 마감 시에는 자동으로 개장시 시장가 예약주문 생성
+        if not self._is_market_open():
+            try:
+                oid = db.create_order_market_open(interaction.guild.id, interaction.user.id, 종목, 'BUY', 수량)
+            except ValueError as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+            await interaction.response.send_message(f"시장 마감 중입니다. 개장 시 시장가 매수 예약이 접수되었습니다. (주문번호 {oid})", ephemeral=True)
+            return
         try:
             new_qty, price, notional, new_bal = db.trade_buy(interaction.guild.id, interaction.user.id, 종목, 수량)
         except ValueError as e:
@@ -121,6 +130,14 @@ class Trading(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
+        if not self._is_market_open():
+            try:
+                oid = db.create_order_market_open(interaction.guild.id, interaction.user.id, 종목, 'SELL', 수량)
+            except ValueError as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+            await interaction.response.send_message(f"시장 마감 중입니다. 개장 시 시장가 매도 예약이 접수되었습니다. (주문번호 {oid})", ephemeral=True)
+            return
         try:
             new_qty, price, proceeds, new_bal = db.trade_sell(interaction.guild.id, interaction.user.id, 종목, 수량)
         except ValueError as e:
@@ -137,6 +154,71 @@ class Trading(commands.Cog):
     @sell.autocomplete("종목")
     async def _ac_sell(self, interaction: discord.Interaction, current: str):
         return self._symbol_choices(current)
+
+    # -------- 예약주문 --------
+    @group.command(name="예약매수", description="지정가로 매수 예약을 겁니다.")
+    @app_commands.describe(종목="ETF 종목", 수량="매수 수량(정수)", 지정가="매수 지정가")
+    async def limit_buy(self, interaction: discord.Interaction, 종목: str, 수량: int, 지정가: float):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        try:
+            oid = db.create_order_limit(interaction.guild.id, interaction.user.id, 종목, 'BUY', 수량, 지정가)
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        await interaction.response.send_message(f"지정가 매수 예약 접수: 주문번호 {oid}, {종목} ×{수량} @ {지정가:.2f}", ephemeral=True)
+
+    @limit_buy.autocomplete("종목")
+    async def _ac_lbuy(self, interaction: discord.Interaction, current: str):
+        return self._symbol_choices(current)
+
+    @group.command(name="예약매도", description="지정가로 매도 예약을 겁니다.")
+    @app_commands.describe(종목="ETF 종목", 수량="매도 수량(정수)", 지정가="매도 지정가")
+    async def limit_sell(self, interaction: discord.Interaction, 종목: str, 수량: int, 지정가: float):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        try:
+            oid = db.create_order_limit(interaction.guild.id, interaction.user.id, 종목, 'SELL', 수량, 지정가)
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        await interaction.response.send_message(f"지정가 매도 예약 접수: 주문번호 {oid}, {종목} ×{수량} @ {지정가:.2f}", ephemeral=True)
+
+    @limit_sell.autocomplete("종목")
+    async def _ac_lsell(self, interaction: discord.Interaction, current: str):
+        return self._symbol_choices(current)
+
+    @group.command(name="예약목록", description="내 예약 주문을 확인합니다.")
+    async def list_orders(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        rows = db.list_user_orders(interaction.guild.id, interaction.user.id, status='OPEN')
+        if not rows:
+            await interaction.response.send_message("열려있는 예약 주문이 없습니다.", ephemeral=True)
+            return
+        lines = []
+        for (oid, sym, side, qty, otype, lpx, status, cts) in rows:
+            if otype == 'LIMIT':
+                lines.append(f"#{oid} {side} {sym} ×{qty} @ {float(lpx):.2f} ({otype})")
+            else:
+                lines.append(f"#{oid} {side} {sym} ×{qty} (개장시장가)")
+        embed = discord.Embed(title="예약 주문", description="\n".join(lines), color=discord.Color.purple())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @group.command(name="예약취소", description="예약 주문을 취소합니다.")
+    @app_commands.describe(주문번호="취소할 주문 번호")
+    async def cancel_order(self, interaction: discord.Interaction, 주문번호: int):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        ok = db.cancel_order(interaction.guild.id, interaction.user.id, 주문번호)
+        if not ok:
+            await interaction.response.send_message("취소할 수 없는 주문입니다.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"주문 #{주문번호} 가 취소되었습니다.", ephemeral=True)
 
     # -------- ETF minute ticks --------
     @tasks.loop(seconds=60)
@@ -156,6 +238,38 @@ class Trading(commands.Cog):
                     db.record_etf_tick(guild.id, ts, sym, px, delta)
                 except Exception:
                     pass
+            # 주문 처리
+            await self._process_orders_for_guild(guild.id, ts)
+
+    async def _process_orders_for_guild(self, guild_id: int, ts: int):
+        rows = db.list_open_orders_for_guild(guild_id)
+        for (oid, user_id, symbol, side, qty, otype, lpx) in rows:
+            try:
+                px = db.get_symbol_price(guild_id, symbol)
+            except Exception:
+                continue
+            try_exec = False
+            if otype == 'MARKET_OPEN':
+                try_exec = True
+            elif otype == 'LIMIT':
+                if side == 'BUY' and px <= float(lpx):
+                    try_exec = True
+                if side == 'SELL' and px >= float(lpx):
+                    try_exec = True
+            if not try_exec:
+                continue
+            # Attempt execution
+            try:
+                if side == 'BUY':
+                    new_qty, price, notional, new_bal = db.trade_buy(guild_id, user_id, symbol, qty)
+                    exec_price = price
+                else:
+                    rem_qty, price, proceeds, new_bal = db.trade_sell(guild_id, user_id, symbol, qty)
+                    exec_price = price
+                db.mark_order_filled(oid, ts, exec_price)
+            except ValueError:
+                # 조건 충족했지만 자금/보유량 부족 등으로 미체결 -> 보류 유지
+                continue
 
     @etf_minute_tick.before_loop
     async def before_etf_minute_tick(self):

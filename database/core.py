@@ -342,28 +342,27 @@ def init_db():
             """
         )
 
-        # Teams (optional; disabled when using inventory as DB)
-        if os.environ.get("TEAMS_VIA_INVENTORY", "1") != "1":
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS teams (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    guild_id INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    parent_id INTEGER,
-                    UNIQUE(guild_id, name, parent_id)
-                );
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_teams (
-                    guild_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    team_id INTEGER NOT NULL,
-                    PRIMARY KEY (guild_id, user_id)
-                );
-                """
-            )
+        # Teams (DB-backed)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                parent_id INTEGER,
+                UNIQUE(guild_id, name, parent_id)
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_teams (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            );
+            """
+        )
 
 __all__ = ['get_conn', 'init_db', 'KST', 'DB_PATH']

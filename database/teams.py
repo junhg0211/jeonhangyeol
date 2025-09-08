@@ -104,6 +104,66 @@ def list_team_children(guild_id: int, parent_id: int) -> list[int]:
         return [int(i) for (i,) in cur.fetchall()]
 
 
+def _find_child_id(conn, guild_id: int, parent_id: int | None, name: str) -> int | None:
+    if parent_id is None:
+        row = conn.execute(
+            "SELECT id FROM teams WHERE guild_id=? AND name=? AND parent_id IS NULL",
+            (guild_id, name),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id FROM teams WHERE guild_id=? AND name=? AND parent_id=?",
+            (guild_id, name, parent_id),
+        ).fetchone()
+    return int(row[0]) if row else None
+
+
+def find_team_by_path(guild_id: int, path: str) -> int | None:
+    tokens = [t for t in (path or "").split() if t]
+    if not tokens:
+        return None
+    with get_conn() as conn:
+        # get root id
+        root = conn.execute(
+            "SELECT id FROM teams WHERE guild_id=? AND name=? AND parent_id IS NULL",
+            (guild_id, TEAM_ROOT_NAME),
+        ).fetchone()
+        if not root:
+            return None
+        parent = int(root[0])
+        for tok in tokens:
+            cid = _find_child_id(conn, guild_id, parent, tok)
+            if cid is None:
+                return None
+            parent = cid
+        return parent
+
+
+def get_descendant_team_ids(guild_id: int, team_id: int) -> list[int]:
+    ids: list[int] = []
+    with get_conn() as conn:
+        to_visit = [int(team_id)]
+        while to_visit:
+            cur = to_visit.pop()
+            ids.append(cur)
+            rows = conn.execute("SELECT id FROM teams WHERE guild_id=? AND parent_id=?", (guild_id, cur)).fetchall()
+            to_visit.extend(int(r[0]) for r in rows)
+    return ids
+
+
+def clear_membership_subtree(guild_id: int, team_id: int) -> int:
+    ids = get_descendant_team_ids(guild_id, team_id)
+    if not ids:
+        return 0
+    with get_conn() as conn:
+        q = ",".join(["?"] * len(ids))
+        cur = conn.execute(
+            f"DELETE FROM user_teams WHERE guild_id=? AND team_id IN ({q})",
+            (guild_id, *ids),
+        )
+        return cur.rowcount or 0
+
+
 def team_subtree_has_members(guild_id: int, team_id: int) -> bool:
     """Return True if any user is assigned to the given team or its descendants."""
     with get_conn() as conn:
@@ -238,6 +298,7 @@ __all__ = [
     'ensure_team_path','set_user_team','clear_user_team','list_teams','list_team_members',
     'count_team_members','count_team_subtree_members',
     'get_user_team_id','get_team_path_names','set_rank_roles','get_rank_roles',
+    'find_team_by_path','get_descendant_team_ids','clear_membership_subtree',
 ]
 
 # ---------------- Inventory-based team API (new preferred implementation) ----------------

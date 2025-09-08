@@ -689,11 +689,12 @@ def find_patent_hits(guild_id: int, content: str):
 
 
 def censor_words(content: str, words: list[str]) -> str:
+    """Return content where matched words are hidden using Discord's spoiler syntax (||word||)."""
     s = content
     for w in sorted(set(words), key=len, reverse=True):
         try:
             pat = _re.compile(_re.escape(w), _re.IGNORECASE)
-            s = pat.sub("■" * len(w), s)
+            s = pat.sub(lambda m: f"||{m.group(0)}||", s)
         except Exception:
             pass
     return s

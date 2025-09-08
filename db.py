@@ -30,6 +30,32 @@ def init_db():
             );
             """
         )
+        # 출석(Attendance)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attendance (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                last_date TEXT,
+                streak INTEGER NOT NULL DEFAULT 0,
+                max_streak INTEGER NOT NULL DEFAULT 0,
+                total_days INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attendance_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                reward INTEGER NOT NULL
+            );
+            """
+        )
         # 특허 미니게임: 특허 및 참가자
         conn.execute(
             """
@@ -436,6 +462,91 @@ def get_index_alerts_enabled(guild_id: int) -> bool:
         if not row or row[0] is None:
             return False
         return bool(int(row[0]))
+
+
+# ----------------------
+# Attendance APIs
+# ----------------------
+
+def _yesterday_kst() -> str:
+    dt = datetime.now(KST) - timedelta(days=1)
+    return dt.strftime("%Y-%m-%d")
+
+
+def attendance_check_in(guild_id: int, user_id: int) -> tuple[bool, int, int, int]:
+    """Check-in user and award streak-based reward.
+
+    Returns (already, streak, reward, max_streak).
+    """
+    today = _today_kst()
+    yday = _yesterday_kst()
+    now = int(_time.time())
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # fetch row
+        cur = conn.execute(
+            "SELECT last_date, streak, max_streak, total_days FROM attendance WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            last_date, streak, maxs, total = None, 0, 0, 0
+        else:
+            last_date, streak, maxs, total = (row[0], int(row[1]), int(row[2]), int(row[3]))
+
+        if last_date == today:
+            return True, streak, 0, maxs
+
+        # compute new streak
+        if last_date == yday:
+            new_streak = streak + 1
+        else:
+            new_streak = 1
+        reward = 10 * new_streak
+        maxs = max(maxs, new_streak)
+        total = total + 1
+
+        # upsert row
+        conn.execute(
+            """
+            INSERT INTO attendance(guild_id, user_id, last_date, streak, max_streak, total_days)
+            VALUES(?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, user_id)
+            DO UPDATE SET last_date=excluded.last_date, streak=excluded.streak, max_streak=excluded.max_streak, total_days=excluded.total_days
+            """,
+            (guild_id, user_id, today, new_streak, maxs, total),
+        )
+        # award
+        bal = _ensure_user(conn, user_id)
+        conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (bal + reward, user_id))
+        conn.execute(
+            "INSERT INTO attendance_logs(ts, guild_id, user_id, date, reward) VALUES(?, ?, ?, ?, ?)",
+            (now, guild_id, user_id, today, reward),
+        )
+        return False, new_streak, reward, maxs
+
+
+def attendance_today(guild_id: int):
+    today = _today_kst()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT user_id, last_date, streak FROM attendance WHERE guild_id=?",
+            (guild_id,),
+        )
+        checked = []
+        not_checked = []
+        for uid, last_date, streak in cur.fetchall():
+            (checked if last_date == today else not_checked).append((int(uid), int(streak) if streak is not None else 0))
+        return checked, not_checked
+
+
+def attendance_max_streak_leaderboard(guild_id: int, limit: int = 20):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT user_id, max_streak, total_days FROM attendance WHERE guild_id=? ORDER BY max_streak DESC, total_days DESC, user_id ASC LIMIT ?",
+            (guild_id, int(limit)),
+        )
+        return [(int(uid), int(ms), int(td)) for (uid, ms, td) in cur.fetchall()]
 
 
 def ensure_indices_for_day(guild_id: int, date_kst: str | None = None) -> None:

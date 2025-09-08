@@ -79,6 +79,21 @@ def init_db():
             );
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patent_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                channel_id INTEGER,
+                message_id INTEGER,
+                words TEXT NOT NULL,
+                total_fee INTEGER NOT NULL,
+                censored INTEGER NOT NULL
+            );
+            """
+        )
         # ETF 분봉 기록
         conn.execute(
             """
@@ -842,6 +857,40 @@ def censor_words(content: str, words: list[str]) -> str:
         except Exception:
             pass
     return s
+
+
+def log_patent_detection(guild_id: int, user_id: int, channel_id: int | None, message_id: int | None, words: list[str], total_fee: int, censored: bool) -> None:
+    now = int(_time.time())
+    words_str = ",".join(sorted(set([w for w in words if w])))
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO patent_logs(ts, guild_id, user_id, channel_id, message_id, words, total_fee, censored) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, guild_id, user_id, channel_id if channel_id is not None else None, message_id if message_id is not None else None, words_str, int(total_fee), 1 if censored else 0),
+        )
+
+
+def get_recent_patent_logs(guild_id: int, limit: int = 20):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT ts, user_id, channel_id, message_id, words, total_fee, censored FROM patent_logs WHERE guild_id=? ORDER BY id DESC LIMIT ?",
+            (guild_id, int(limit)),
+        )
+        return [
+            (int(ts), int(uid), (int(ch) if ch is not None else None), (int(mid) if mid is not None else None), str(words), int(fee), bool(c))
+            for (ts, uid, ch, mid, words, fee, c) in cur.fetchall()
+        ]
+
+
+def get_user_patent_logs(guild_id: int, user_id: int, limit: int = 20):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT ts, user_id, channel_id, message_id, words, total_fee, censored FROM patent_logs WHERE guild_id=? AND user_id=? ORDER BY id DESC LIMIT ?",
+            (guild_id, user_id, int(limit)),
+        )
+        return [
+            (int(ts), int(uid), (int(ch) if ch is not None else None), (int(mid) if mid is not None else None), str(words), int(fee), bool(c))
+            for (ts, uid, ch, mid, words, fee, c) in cur.fetchall()
+        ]
 
 
 def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:

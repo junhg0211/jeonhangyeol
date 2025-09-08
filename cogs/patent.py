@@ -109,6 +109,18 @@ class Patent(commands.Cog):
                     db.transfer(message.author.id, owner_id, amount)
                 except Exception:
                     pass
+            try:
+                db.log_patent_detection(
+                    guild_id=message.guild.id,
+                    user_id=message.author.id,
+                    channel_id=message.channel.id,
+                    message_id=message.id,
+                    words=words,
+                    total_fee=total,
+                    censored=False,
+                )
+            except Exception:
+                pass
             return
         # Not enough funds: censor
         censored = db.censor_words(content, words)
@@ -135,6 +147,44 @@ class Patent(commands.Cog):
                 )
             except Exception:
                 pass
+        # log censored event
+        try:
+            db.log_patent_detection(
+                guild_id=message.guild.id,
+                user_id=message.author.id,
+                channel_id=message.channel.id,
+                message_id=message.id,
+                words=words,
+                total_fee=total,
+                censored=True,
+            )
+        except Exception:
+            pass
+
+    @group.command(name="로그", description="최근 특허 검출 내역을 확인합니다.")
+    @app_commands.describe(유저="특정 유저만 필터", 상위="표시 개수(기본 20, 최대 50)")
+    async def logs(self, interaction: discord.Interaction, 유저: discord.Member | None = None, 상위: int = 20):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        limit = max(1, min(int(상위), 50))
+        if 유저:
+            rows = db.get_user_patent_logs(interaction.guild.id, 유저.id, limit)
+        else:
+            rows = db.get_recent_patent_logs(interaction.guild.id, limit)
+        if not rows:
+            await interaction.response.send_message("최근 검출 내역이 없습니다.", ephemeral=True)
+            return
+        lines = []
+        for ts, uid, ch, mid, words, fee, censored in rows:
+            member = interaction.guild.get_member(uid)
+            name = member.display_name if member else f"<@{uid}>"
+            ch_text = f" <#{ch}>" if ch else ""
+            msg_link = f" [메시지]" if mid else ""
+            state = "검열" if censored else "과금"
+            lines.append(f"<t:{ts}:R> {name}{ch_text} — {state} • 단어: {words or '-'} • 합계 {fee:,}원")
+        embed = discord.Embed(title="🧾 특허 검출 내역", description="\n".join(lines), color=discord.Color.dark_teal())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

@@ -587,6 +587,10 @@ def is_instrument_item_name(name: str) -> bool:
     return name in instrument_item_names()
 
 
+def is_patent_item_name(name: str) -> bool:
+    return isinstance(name, str) and name.startswith("특허:")
+
+
 # ----------------------
 # Patent game APIs
 # ----------------------
@@ -646,9 +650,15 @@ def add_patent(guild_id: int, owner_id: int, word: str, price: int) -> int:
                 "INSERT INTO patents(guild_id, owner_id, word, price, created_ts) VALUES(?, ?, ?, ?, ?)",
                 (guild_id, owner_id, key, int(price), now),
             )
+            pid = int(cur.lastrowid)
         except sqlite3.IntegrityError:
             raise ValueError("이미 출원된 단어입니다.")
-        return int(cur.lastrowid)
+    # 인벤토리에 특허 아이템 추가 (📜 특허:<word>)
+    try:
+        grant_item(owner_id, f"특허:{key}", "📜", 1)
+    except Exception:
+        pass
+    return pid
 
 
 def cancel_patent(guild_id: int, owner_id: int, word: str) -> bool:
@@ -658,7 +668,13 @@ def cancel_patent(guild_id: int, owner_id: int, word: str) -> bool:
             "DELETE FROM patents WHERE guild_id=? AND owner_id=? AND word=?",
             (guild_id, owner_id, key),
         )
-        return cur.rowcount > 0
+        ok = cur.rowcount > 0
+    if ok:
+        try:
+            discard_item(owner_id, f"특허:{key}", "📜", 1)
+        except Exception:
+            pass
+    return ok
 
 
 def list_patents(guild_id: int):

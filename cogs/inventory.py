@@ -114,7 +114,7 @@ class Inventory(commands.Cog):
             return
         # 투자 종목 아이템 차단
         try:
-            if db.is_instrument_item_name(name):
+            if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
                 await interaction.response.send_message("투자 종목 아이템은 양도할 수 없습니다. /투자 명령을 이용해 주세요.", ephemeral=True)
                 return
         except Exception:
@@ -174,7 +174,7 @@ class Inventory(commands.Cog):
             return
         # 투자 종목 아이템 차단
         try:
-            if db.is_instrument_item_name(name):
+            if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
                 await interaction.response.send_message("투자 종목 아이템은 폐기할 수 없습니다. /투자 매도로 정리해 주세요.", ephemeral=True)
                 return
         except Exception:
@@ -206,7 +206,7 @@ class Inventory(commands.Cog):
         for (emoji, name, qty) in rows[:25]:
             # 투자 종목 아이템 숨김
             try:
-                if db.is_instrument_item_name(name):
+                if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
                     continue
             except Exception:
                 pass
@@ -223,7 +223,7 @@ class Inventory(commands.Cog):
         for (emoji, name, qty) in rows[:25]:
             # 투자 종목 아이템 숨김
             try:
-                if db.is_instrument_item_name(name):
+                if db.is_instrument_item_name(name) or db.is_patent_item_name(name):
                     continue
             except Exception:
                 pass

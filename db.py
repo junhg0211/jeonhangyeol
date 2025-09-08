@@ -30,6 +30,46 @@ def init_db():
             );
             """
         )
+        # 투자: 상품, 포지션, 체결 내역
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS instruments (
+                symbol TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,   -- ETF/INDEX
+                category TEXT         -- chat/voice/react/all
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS positions (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                qty INTEGER NOT NULL,
+                avg_cost REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id, symbol),
+                FOREIGN KEY (symbol) REFERENCES instruments(symbol) ON DELETE CASCADE
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,   -- BUY/SELL
+                qty INTEGER NOT NULL,
+                price REAL NOT NULL,
+                notional INTEGER NOT NULL,
+                FOREIGN KEY (symbol) REFERENCES instruments(symbol) ON DELETE CASCADE
+            );
+            """
+        )
         # 활동 지수: 일자별 지수 상태
         conn.execute(
             """
@@ -408,6 +448,144 @@ def get_index_info(guild_id: int, date_kst: str, category: str) -> tuple[float, 
             raise ValueError("Index not initialised")
         current, lower, upper, high, low, open_idx = row
         return float(current), float(lower), float(upper), (float(high) if high is not None else None), (float(low) if low is not None else None), float(open_idx)
+
+
+# ----------------------
+# Trading helpers
+# ----------------------
+
+INSTRUMENTS_DEFAULT = [
+    ("ETF_CHAT", "채팅 ETF", "ETF", "chat"),
+    ("ETF_VOICE", "통화 ETF", "ETF", "voice"),
+    ("ETF_REACT", "반응 ETF", "ETF", "react"),
+    ("ETF_ALL", "종합 ETF", "ETF", "all"),
+]
+
+
+def ensure_instruments():
+    with get_conn() as conn:
+        for sym, name, kind, cat in INSTRUMENTS_DEFAULT:
+            conn.execute(
+                "INSERT OR IGNORE INTO instruments(symbol, name, kind, category) VALUES(?, ?, ?, ?)",
+                (sym, name, kind, cat),
+            )
+
+
+def is_trading_time_kst(ts: int | None = None) -> bool:
+    dt = datetime.fromtimestamp(ts, KST) if ts else datetime.now(KST)
+    t = dt.time()
+    return (t >= datetime.strptime("09:00", "%H:%M").time()) and (t < datetime.strptime("21:00", "%H:%M").time())
+
+
+def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:
+    date_kst = _today_kst(ts)
+    if symbol == "ETF_CHAT":
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "chat")
+        return cur
+    if symbol == "ETF_VOICE":
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "voice")
+        return cur
+    if symbol == "ETF_REACT":
+        cur, _, _ = get_index_bounds(guild_id, date_kst, "react")
+        return cur
+    if symbol == "ETF_ALL":
+        c1, _, _ = get_index_bounds(guild_id, date_kst, "chat")
+        c2, _, _ = get_index_bounds(guild_id, date_kst, "voice")
+        c3, _, _ = get_index_bounds(guild_id, date_kst, "react")
+        return (c1 + c2 + c3) / 3.0
+    raise ValueError("Unknown symbol")
+
+
+def trade_buy(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int, float, int, int]:
+    """Execute market buy. Returns (new_qty, price, notional, new_balance)."""
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    if not is_trading_time_kst():
+        raise ValueError("시장 시간이 아닙니다. (KST 09:00–21:00)")
+    price = float(get_symbol_price(guild_id, symbol))
+    notional = int(round(price * qty))
+    ts = int(_time.time())
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        bal = _ensure_user(conn, user_id)
+        if bal < notional:
+            raise ValueError("잔액이 부족합니다.")
+        # deduct cash
+        conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (bal - notional, user_id))
+        # position upsert and avg cost
+        cur = conn.execute(
+            "SELECT qty, avg_cost FROM positions WHERE guild_id=? AND user_id=? AND symbol=?",
+            (guild_id, user_id, symbol),
+        )
+        row = cur.fetchone()
+        if row:
+            old_qty, avg_cost = int(row[0]), float(row[1])
+            new_qty = old_qty + qty
+            new_avg = ((avg_cost * old_qty) + (price * qty)) / new_qty
+            conn.execute(
+                "UPDATE positions SET qty=?, avg_cost=? WHERE guild_id=? AND user_id=? AND symbol=?",
+                (new_qty, new_avg, guild_id, user_id, symbol),
+            )
+        else:
+            new_qty = qty
+            conn.execute(
+                "INSERT INTO positions(guild_id, user_id, symbol, qty, avg_cost) VALUES(?, ?, ?, ?, ?)",
+                (guild_id, user_id, symbol, qty, price),
+            )
+        conn.execute(
+            "INSERT INTO trades(ts, guild_id, user_id, symbol, side, qty, price, notional) VALUES(?, ?, ?, ?, 'BUY', ?, ?, ?)",
+            (ts, guild_id, user_id, symbol, qty, price, notional),
+        )
+        # new balance
+        new_bal = bal - notional
+        return new_qty, price, notional, new_bal
+
+
+def trade_sell(guild_id: int, user_id: int, symbol: str, qty: int) -> tuple[int, float, int, int]:
+    """Execute market sell. Returns (remaining_qty, price, proceeds, new_balance)."""
+    if qty <= 0:
+        raise ValueError("Quantity must be positive")
+    if not is_trading_time_kst():
+        raise ValueError("시장 시간이 아닙니다. (KST 09:00–21:00)")
+    price = float(get_symbol_price(guild_id, symbol))
+    proceeds = int(round(price * qty))
+    ts = int(_time.time())
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "SELECT qty FROM positions WHERE guild_id=? AND user_id=? AND symbol=?",
+            (guild_id, user_id, symbol),
+        )
+        row = cur.fetchone()
+        pos_qty = int(row[0]) if row else 0
+        if pos_qty < qty:
+            raise ValueError("보유 수량이 부족합니다.")
+        new_qty = pos_qty - qty
+        if new_qty == 0:
+            conn.execute("DELETE FROM positions WHERE guild_id=? AND user_id=? AND symbol=?", (guild_id, user_id, symbol))
+        else:
+            conn.execute(
+                "UPDATE positions SET qty=? WHERE guild_id=? AND user_id=? AND symbol=?",
+                (new_qty, guild_id, user_id, symbol),
+            )
+        # credit cash
+        bal = _ensure_user(conn, user_id)
+        new_bal = bal + proceeds
+        conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (new_bal, user_id))
+        conn.execute(
+            "INSERT INTO trades(ts, guild_id, user_id, symbol, side, qty, price, notional) VALUES(?, ?, ?, ?, 'SELL', ?, ?, ?)",
+            (ts, guild_id, user_id, symbol, qty, price, proceeds),
+        )
+        return new_qty, price, proceeds, new_bal
+
+
+def list_positions(guild_id: int, user_id: int):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT symbol, qty, avg_cost FROM positions WHERE guild_id=? AND user_id=? ORDER BY symbol",
+            (guild_id, user_id),
+        )
+        return [(str(s), int(q), float(a)) for (s, q, a) in cur.fetchall()]
 
 
 # ----------------------

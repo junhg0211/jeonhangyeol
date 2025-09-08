@@ -102,10 +102,29 @@ class Teams(commands.Cog):
         embed = discord.Embed(title="👥 팀 목록", description="\n".join(lines) if lines else "(표시할 팀이 없습니다)", color=discord.Color.purple())
         await interaction.response.send_message(embed=embed)
 
-    @group.command(name="정리", description="인벤토리 기반에서는 삭제할 팀 기록이 없습니다.")
+    @group.command(name="삭제", description="지정한 팀과 하위 팀의 소속을 일괄 해제합니다.")
+    @app_commands.describe(경로="예: 이정그룹 이정조주 술부")
     @app_commands.default_permissions(manage_guild=True)
-    async def prune_empty(self, interaction: discord.Interaction):
-        await interaction.response.send_message("인벤토리 기반 모드에서는 팀 레코드가 없어 정리할 항목이 없습니다.", ephemeral=True)
+    async def delete_team(self, interaction: discord.Interaction, 경로: str):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        try:
+            prefix = db.ensure_team_path(interaction.guild.id, 경로)
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        uid_to_path = db.inv_team_all_user_paths(interaction.guild.id)
+        targets = [uid for uid, p in uid_to_path.items() if p == prefix or p.startswith(prefix + " ")]
+        if not targets:
+            await interaction.response.send_message("해당 팀(및 하위 팀)에 소속된 인원이 없습니다.", ephemeral=True)
+            return
+        for uid in targets:
+            try:
+                db.inv_team_clear_user(interaction.guild.id, uid)
+            except Exception:
+                pass
+        await interaction.response.send_message(f"삭제 완료: 소속 해제 {len(targets)}명 (팀 '{prefix}' 및 하위)", ephemeral=True)
 
     # (직급 관련 명령 제거)
 

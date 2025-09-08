@@ -103,31 +103,33 @@ class Patent(commands.Cog):
         total = sum(charges.values())
         bal = db.get_balance(message.author.id)
         if bal >= total:
-            # Pay all owners
+            # Pay all owners quietly (no reactions/messages)
             for owner_id, amount in charges.items():
                 try:
                     db.transfer(message.author.id, owner_id, amount)
                 except Exception:
                     pass
-            try:
-                await message.add_reaction("✅")
-            except Exception:
-                pass
             return
         # Not enough funds: censor
         censored = db.censor_words(content, words)
+        info = (
+            "이 메시지는 특허 미니게임 규칙에 따라 검열되었습니다.\n"
+            "- 메시지에 등록된 특허 단어가 포함되고 잔액이 부족하면 단어가 스포일러로 숨겨집니다.\n"
+            "- 참여: `/특허 참가` • 하차: `/특허 하차` • 특허 목록: `/특허 목록`\n"
+            "- 단어 사용료는 해당 특허의 출원가의 1/50입니다."
+        )
         try:
             await message.delete()
             await message.channel.send(
-                content=f"{message.author.mention} (잔액 부족으로 단어가 검열되었습니다)\n{censored}",
+                content=f"{message.author.mention}\n{censored}\n\n{info}",
                 suppress_embeds=True,
                 allowed_mentions=discord.AllowedMentions(users=[message.author]),
             )
         except Exception:
-            # Fallback: reply with censored version
+            # Fallback: reply with censored version + info
             try:
                 await message.reply(
-                    content=f"(잔액 부족으로 단어가 검열되어야 합니다)\n{censored}",
+                    content=f"{censored}\n\n{info}",
                     mention_author=False,
                     suppress_embeds=True,
                 )

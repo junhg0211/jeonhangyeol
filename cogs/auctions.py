@@ -57,6 +57,20 @@ class Auctions(commands.Cog):
         if not emoji or not name:
             await interaction.response.send_message("잘못된 아이템입니다.", ephemeral=True)
             return
+        # 투자 종목은 경매 불가(시장 규칙 유지)
+        try:
+            if db.is_instrument_item_name(name):
+                await interaction.response.send_message("투자 종목 아이템은 경매에 출품할 수 없습니다. /투자 명령을 이용해 주세요.", ephemeral=True)
+                return
+        except Exception:
+            pass
+        # 특허 아이템은 1개 단위만 허용
+        try:
+            if db.is_patent_item_name(name) and 수량 != 1:
+                await interaction.response.send_message("특허 아이템은 1개 단위로만 출품할 수 있습니다.", ephemeral=True)
+                return
+        except Exception:
+            pass
 
         await interaction.response.defer(ephemeral=True)
         try:
@@ -190,6 +204,11 @@ class Auctions(commands.Cog):
         rows = db.list_inventory(interaction.user.id, query=current or None)
         choices = []
         for (emoji, name, qty) in rows[:25]:
+            try:
+                if db.is_instrument_item_name(name):
+                    continue
+            except Exception:
+                pass
             choices.append(app_commands.Choice(name=f"{emoji} {name} × {qty}", value=json.dumps({"e": emoji, "n": name}, ensure_ascii=False)))
         return choices
 

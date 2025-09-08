@@ -1219,11 +1219,11 @@ def finalize_due_auctions(max_to_close: int = 50) -> int:
     with get_conn() as conn:
         # fetch a batch to avoid long locks
         cur = conn.execute(
-            "SELECT id, seller_id, name, emoji, qty, current_bid, current_bidder_id FROM auctions WHERE status='open' AND end_at <= ? LIMIT ?",
+            "SELECT id, guild_id, seller_id, name, emoji, qty, current_bid, current_bidder_id FROM auctions WHERE status='open' AND end_at <= ? LIMIT ?",
             (now, max_to_close),
         )
         rows = cur.fetchall()
-        for (aid, seller_id, name, emoji, qty, current_bid, current_bidder_id) in rows:
+        for (aid, gid, seller_id, name, emoji, qty, current_bid, current_bidder_id) in rows:
             conn.execute("BEGIN IMMEDIATE")
             # Recheck status for this row
             cur2 = conn.execute(
@@ -1261,6 +1261,16 @@ def finalize_due_auctions(max_to_close: int = 50) -> int:
                 """,
                 (cbid, qty, name, emoji),
             )
+            # If the item is a patent, transfer ownership in patents table
+            try:
+                if str(emoji) == "📜" and str(name).startswith("특허:"):
+                    w = str(name).split(":", 1)[1]
+                    conn.execute(
+                        "UPDATE patents SET owner_id=? WHERE guild_id=? AND word=?",
+                        (cbid, int(gid) if gid is not None else 0, w),
+                    )
+            except Exception:
+                pass
             # Pay seller (funds already deducted from winner; now credit seller)
             cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
             row = cur3.fetchone()
@@ -1337,6 +1347,17 @@ def finalize_due_auctions_details(max_to_close: int = 50):
                 """,
                 (cbid, qty, name, emoji),
             )
+            # patent ownership transfer
+            try:
+                if str(emoji) == "📜" and str(name).startswith("특허:"):
+                    w = str(name).split(":", 1)[1]
+                    conn.execute(
+                        "UPDATE patents SET owner_id=? WHERE guild_id=? AND word=?",
+                        (cbid, gid if gid is not None else 0, w),
+                    )
+                
+            except Exception:
+                pass
             # pay seller
             cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
             row = cur3.fetchone()

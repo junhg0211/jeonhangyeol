@@ -6,6 +6,7 @@ import db
 from zoneinfo import ZoneInfo
 from datetime import datetime
 import time
+import asyncio
 import tempfile
 
 try:
@@ -24,6 +25,9 @@ SYMBOLS = [
     ("ETF_VOICE", "통화 ETF"),
     ("ETF_REACT", "반응 ETF"),
     ("ETF_ALL", "종합 ETF"),
+    ("IDX_CHAT", "채팅 지수"),
+    ("IDX_VOICE", "통화 지수"),
+    ("IDX_REACT", "반응 지수"),
 ]
 
 
@@ -62,7 +66,7 @@ class Trading(commands.Cog):
 
     def _aggregate_candles(self, rows, timeframe: str, count: int):
         # rows: list[(ts, price)] UTC ts; align on KST boundaries
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         KST = ZoneInfo("Asia/Seoul")
         tf = timeframe
@@ -294,6 +298,7 @@ class Trading(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         if 단위 not in ("분", "시간", "일", "주"):
             await interaction.response.send_message("단위는 분/시간/일/주 중 하나여야 합니다.", ephemeral=True)
             return
@@ -302,7 +307,17 @@ class Trading(commands.Cog):
         now = int(time.time())
         sec = {"분": 60, "시간": 3600, "일": 86400, "주": 604800}[단위]
         since = now - sec * (count + 10)
-        rows = db.get_etf_ticks_since(interaction.guild.id, 종목, since)
+        # 데이터 소스 분기: ETF_* 는 etf_ticks, IDX_* 는 activity_ticks
+        if 종목.startswith("ETF_"):
+            rows = db.get_etf_ticks_since(interaction.guild.id, 종목, since)
+        elif 종목 == "IDX_CHAT":
+            rows = db.get_index_ticks_since(interaction.guild.id, "chat", since)
+        elif 종목 == "IDX_VOICE":
+            rows = db.get_index_ticks_since(interaction.guild.id, "voice", since)
+        elif 종목 == "IDX_REACT":
+            rows = db.get_index_ticks_since(interaction.guild.id, "react", since)
+        else:
+            rows = []
         if not rows:
             await interaction.response.send_message("차트 데이터가 부족합니다.", ephemeral=True)
             return
@@ -313,14 +328,15 @@ class Trading(commands.Cog):
         if plt is None:
             await interaction.response.send_message("서버에 matplotlib가 설치되어 있지 않아 차트를 렌더링할 수 없습니다.", ephemeral=True)
             return
-        path = self._render_candles(종목, candles, 단위)
+        # 렌더링은 별도 스레드에서 처리하여 이벤트 루프 블로킹 방지
+        path = await asyncio.to_thread(self._render_candles, 종목, candles, 단위)
         if not path:
             await interaction.response.send_message("차트 생성에 실패했습니다.", ephemeral=True)
             return
         file = discord.File(path, filename=f"{종목}_{단위}.png")
         embed = discord.Embed(title=f"{종목} {단위} 차트", color=discord.Color.teal())
         embed.set_image(url=f"attachment://{종목}_{단위}.png")
-        await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
+        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
 
     @chart.autocomplete("종목")
     async def _ac_chart_symbol(self, interaction: discord.Interaction, current: str):

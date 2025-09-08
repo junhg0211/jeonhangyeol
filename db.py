@@ -673,6 +673,20 @@ def get_etf_ticks_since(guild_id: int, symbol: str, since_ts: int):
         return [(int(ts), float(px)) for (ts, px) in cur.fetchall()]
 
 
+def get_index_ticks_since(guild_id: int, category: str, since_ts: int):
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT ts, idx_value
+            FROM activity_ticks
+            WHERE guild_id=? AND category=? AND ts>=?
+            ORDER BY ts ASC
+            """,
+            (guild_id, category, since_ts),
+        )
+        return [(int(ts), float(px)) for (ts, px) in cur.fetchall()]
+
+
 # ----------------------
 # Orders API
 # ----------------------

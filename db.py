@@ -641,6 +641,15 @@ def record_etf_tick(guild_id: int, ts: int, symbol: str, price: float, delta: fl
         )
 
 
+def get_etf_ticks_since(guild_id: int, symbol: str, since_ts: int):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT ts, price FROM etf_ticks WHERE guild_id=? AND symbol=? AND ts>=? ORDER BY ts ASC",
+            (guild_id, symbol, since_ts),
+        )
+        return [(int(ts), float(px)) for (ts, px) in cur.fetchall()]
+
+
 # ----------------------
 # Orders API
 # ----------------------

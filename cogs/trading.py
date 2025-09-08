@@ -6,6 +6,14 @@ import db
 from zoneinfo import ZoneInfo
 from datetime import datetime
 import time
+import tempfile
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover
+    plt = None
 
 
 KST = ZoneInfo("Asia/Seoul")
@@ -51,6 +59,78 @@ class Trading(commands.Cog):
         embed = discord.Embed(title="시세", description="\n".join(desc), color=discord.Color.teal())
         embed.set_footer(text=f"{date} KST • 시장 {'개장' if self._is_market_open() else '마감'}")
         return embed
+
+    def _aggregate_candles(self, rows, timeframe: str, count: int):
+        # rows: list[(ts, price)] UTC ts; align on KST boundaries
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        KST = ZoneInfo("Asia/Seoul")
+        tf = timeframe
+        buckets = {}
+        order = []
+        for ts, px in rows:
+            dt = datetime.fromtimestamp(ts, KST)
+            if tf == '분':
+                key = dt.replace(second=0, microsecond=0)
+            elif tf == '시간':
+                key = dt.replace(minute=0, second=0, microsecond=0)
+            elif tf == '일':
+                key = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            else:  # '주' — ISO week start Monday
+                monday = (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+                key = monday
+            if key not in buckets:
+                buckets[key] = []
+                order.append(key)
+            buckets[key].append((ts, px))
+        # Build candles in order
+        candles = []
+        for key in order:
+            arr = buckets[key]
+            arr.sort(key=lambda x: x[0])
+            prices = [p for _, p in arr]
+            o = prices[0]
+            h = max(prices)
+            l = min(prices)
+            c = prices[-1]
+            candles.append((key, o, h, l, c))
+        # limit to most recent 'count'
+        return candles[-count:]
+
+    def _render_candles(self, symbol: str, candles, timeframe: str):
+        if plt is None:
+            return None
+        import matplotlib.pyplot as plt  # already set to Agg
+        from matplotlib.patches import Rectangle
+        fig, ax = plt.subplots(figsize=(10, 4), dpi=150)
+        ax.set_facecolor('white')
+        xs = list(range(len(candles)))
+        if not xs:
+            return None
+        highs = [h for _, _, h, _, _ in candles]
+        lows = [l for _, _, _, l, _ in candles]
+        ax.set_xlim(-0.5, len(xs) - 0.5)
+        ax.set_ylim(min(lows) * 0.995, max(highs) * 1.005)
+        w = 0.6
+        for i, (_, o, h, l, c) in enumerate(candles):
+            color = '#e74c3c' if c < o else '#2ecc71'
+            # wick
+            ax.vlines(i, l, h, color=color, linewidth=1)
+            # body
+            y = min(o, c)
+            height = abs(c - o)
+            if height == 0:
+                height = max(highs) * 0.0005  # minimal visible body
+            rect = Rectangle((i - w / 2, y), w, height, facecolor=color, edgecolor=color, linewidth=1)
+            ax.add_patch(rect)
+        ax.set_title(f"{symbol} {timeframe} 봉차트")
+        ax.set_xticks([])
+        ax.set_ylabel('가격')
+        fig.tight_layout()
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        fig.savefig(tmp.name, bbox_inches='tight')
+        plt.close(fig)
+        return tmp.name
 
     @group.command(name="시세", description="현재 시세를 확인합니다.")
     async def quote(self, interaction: discord.Interaction):
@@ -207,6 +287,44 @@ class Trading(commands.Cog):
                 lines.append(f"#{oid} {side} {sym} ×{qty} (개장시장가)")
         embed = discord.Embed(title="예약 주문", description="\n".join(lines), color=discord.Color.purple())
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @group.command(name="차트", description="ETF 봉차트를 출력합니다.")
+    @app_commands.describe(종목="ETF 종목", 단위="분/시간/일/주", 길이="캔들 개수(기본 60, 최대 240)")
+    async def chart(self, interaction: discord.Interaction, 종목: str, 단위: str, 길이: int = 60):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        if 단위 not in ("분", "시간", "일", "주"):
+            await interaction.response.send_message("단위는 분/시간/일/주 중 하나여야 합니다.", ephemeral=True)
+            return
+        count = max(5, min(int(길이), 240))
+        # choose window
+        now = int(time.time())
+        sec = {"분": 60, "시간": 3600, "일": 86400, "주": 604800}[단위]
+        since = now - sec * (count + 10)
+        rows = db.get_etf_ticks_since(interaction.guild.id, 종목, since)
+        if not rows:
+            await interaction.response.send_message("차트 데이터가 부족합니다.", ephemeral=True)
+            return
+        candles = self._aggregate_candles(rows, 단위, count)
+        if len(candles) < 2:
+            await interaction.response.send_message("차트 데이터가 부족합니다.", ephemeral=True)
+            return
+        if plt is None:
+            await interaction.response.send_message("서버에 matplotlib가 설치되어 있지 않아 차트를 렌더링할 수 없습니다.", ephemeral=True)
+            return
+        path = self._render_candles(종목, candles, 단위)
+        if not path:
+            await interaction.response.send_message("차트 생성에 실패했습니다.", ephemeral=True)
+            return
+        file = discord.File(path, filename=f"{종목}_{단위}.png")
+        embed = discord.Embed(title=f"{종목} {단위} 차트", color=discord.Color.teal())
+        embed.set_image(url=f"attachment://{종목}_{단위}.png")
+        await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
+
+    @chart.autocomplete("종목")
+    async def _ac_chart_symbol(self, interaction: discord.Interaction, current: str):
+        return self._symbol_choices(current)
 
     @group.command(name="예약취소", description="예약 주문을 취소합니다.")
     @app_commands.describe(주문번호="취소할 주문 번호")

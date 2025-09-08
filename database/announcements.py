@@ -23,6 +23,35 @@ def get_announce_channel(guild_id: int) -> int | None:
         return int(row[0]) if row and row[0] is not None else None
 
 
+# ---- Notify channel (alias to announce channel for now) ----
+def set_notify_channel(guild_id: int, channel_id: int | None) -> None:
+    """Alias to set_announce_channel for a generic notify destination."""
+    return set_announce_channel(guild_id, channel_id)
+
+
+def get_notify_channel(guild_id: int) -> int | None:
+    """Prefer announce channel; fall back to main chat if not set."""
+    ch = get_announce_channel(guild_id)
+    if ch is not None:
+        return ch
+    return get_main_chat_channel(guild_id)
+
+
+# ---- Activity index alerts toggle ----
+def set_index_alerts_enabled(guild_id: int, enabled: bool) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_settings(guild_id, index_alerts_enabled) VALUES(?, ?)\n             ON CONFLICT(guild_id) DO UPDATE SET index_alerts_enabled=excluded.index_alerts_enabled",
+            (guild_id, 1 if enabled else 0),
+        )
+
+
+def get_index_alerts_enabled(guild_id: int) -> bool:
+    with get_conn() as conn:
+        row = conn.execute("SELECT index_alerts_enabled FROM guild_settings WHERE guild_id=?", (guild_id,)).fetchone()
+        return bool(int(row[0])) if row and row[0] is not None else False
+
+
 def add_announcement(guild_id: int, content: str) -> int:
     import time
     with get_conn() as conn:
@@ -73,6 +102,7 @@ def incr_message_count(guild_id: int, channel_id: int) -> int:
 
 __all__ = [
     'set_main_chat_channel','get_main_chat_channel','set_announce_channel','get_announce_channel',
+    'set_notify_channel','get_notify_channel','set_index_alerts_enabled','get_index_alerts_enabled',
     'add_announcement','list_announcements','remove_announcement','clear_announcements',
     'has_announcements','next_announcement','incr_message_count',
 ]

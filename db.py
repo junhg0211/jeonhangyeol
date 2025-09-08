@@ -75,10 +75,15 @@ def init_db():
                 word TEXT NOT NULL,
                 price INTEGER NOT NULL,
                 created_ts INTEGER NOT NULL,
+                auctioned INTEGER,
                 UNIQUE (guild_id, word)
             );
             """
         )
+        try:
+            conn.execute("ALTER TABLE patents ADD COLUMN auctioned INTEGER")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS patent_logs (
@@ -818,6 +823,28 @@ def transfer_patent(guild_id: int, from_id: int, to_id: int, word: str) -> bool:
             (to_id, guild_id, from_id, key),
         )
         return cur.rowcount > 0
+
+
+def list_expired_unauctioned_patents(limit: int = 50):
+    now = int(_time.time())
+    cutoff = now - 14 * 24 * 3600
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT id, guild_id, owner_id, word, price, created_ts
+            FROM patents
+            WHERE created_ts <= ? AND (auctioned IS NULL OR auctioned = 0)
+            ORDER BY created_ts ASC
+            LIMIT ?
+            """,
+            (cutoff, int(limit)),
+        )
+        return [(int(i), int(g), int(o), str(w), int(p), int(cts)) for (i, g, o, w, p, cts) in cur.fetchall()]
+
+
+def mark_patent_auctioned(patent_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE patents SET auctioned=1 WHERE id=?", (int(patent_id),))
 
 
 def list_patents(guild_id: int):

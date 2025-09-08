@@ -327,6 +327,26 @@ class Auctions(commands.Cog):
     @tasks.loop(seconds=30)
     async def closer(self):
         try:
+            # 0) Expired patents -> create auctions (max duration)
+            try:
+                expired = db.list_expired_unauctioned_patents(50)
+            except Exception:
+                expired = []
+            for (pid, gid, owner_id, word, price, cts) in expired:
+                try:
+                    db.create_auction(
+                        seller_id=owner_id,
+                        name=f"특허:{word}",
+                        emoji="📜",
+                        qty=1,
+                        start_price=1,
+                        duration_seconds=30 * 24 * 3600,
+                        guild_id=gid,
+                    )
+                    db.mark_patent_auctioned(pid)
+                except Exception:
+                    # keep trying next loop if failed
+                    continue
             # 1) 서버에서 판매자가 없는 유찰 경매 파기
             due = db.list_due_unsold_auctions(50)
             discarded = 0

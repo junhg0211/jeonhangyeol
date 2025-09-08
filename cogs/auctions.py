@@ -23,23 +23,7 @@ class Auctions(commands.Cog):
 
     auctions = app_commands.Group(name="경매", description="경매 기능")
 
-    # 알림 채널 설정: /경매 채널 [채널]
-    @auctions.command(name="채널", description="경매 시작 알림 채널을 설정/해제합니다.")
-    @app_commands.describe(채널="경매 알림을 보낼 텍스트 채널 (비우면 해제)")
-    @app_commands.default_permissions(manage_guild=True)
-    async def set_channel(self, interaction: discord.Interaction, 채널: discord.TextChannel | None = None):
-        if not interaction.guild:
-            await interaction.response.send_message("서버 내에서만 사용할 수 있습니다.", ephemeral=True)
-            return
-        try:
-            db.set_auction_channel(interaction.guild.id, 채널.id if 채널 else None)
-        except Exception as e:
-            await interaction.response.send_message(f"설정 중 오류: {e}", ephemeral=True)
-            return
-        if 채널:
-            await interaction.response.send_message(f"경매 알림 채널을 {채널.mention}(으)로 설정했습니다.", ephemeral=True)
-        else:
-            await interaction.response.send_message("경매 알림 채널 설정을 해제했습니다.", ephemeral=True)
+    # (중복 제거) 경매 채널 명령은 제거되었습니다. 알림 채널은 /설정 알림채널을 사용하세요.
 
     # 출품: /경매 출품 아이템 수량 시작가 기간(시간)
     @auctions.command(name="출품", description="보유 아이템을 경매에 출품합니다.")

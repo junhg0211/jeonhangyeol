@@ -112,6 +112,13 @@ class Inventory(commands.Cog):
         if not emo or not name:
             await interaction.response.send_message("잘못된 아이템입니다. 다시 선택하세요.", ephemeral=True)
             return
+        # 투자 종목 아이템 차단
+        try:
+            if db.is_instrument_item_name(name):
+                await interaction.response.send_message("투자 종목 아이템은 양도할 수 없습니다. /투자 명령을 이용해 주세요.", ephemeral=True)
+                return
+        except Exception:
+            pass
 
         await interaction.response.defer()
 
@@ -165,6 +172,13 @@ class Inventory(commands.Cog):
         if not emo or not name:
             await interaction.response.send_message("잘못된 아이템입니다. 다시 선택하세요.", ephemeral=True)
             return
+        # 투자 종목 아이템 차단
+        try:
+            if db.is_instrument_item_name(name):
+                await interaction.response.send_message("투자 종목 아이템은 폐기할 수 없습니다. /투자 매도로 정리해 주세요.", ephemeral=True)
+                return
+        except Exception:
+            pass
 
         await interaction.response.defer(ephemeral=True)
 
@@ -190,6 +204,12 @@ class Inventory(commands.Cog):
         # 최대 25개 제한
         choices = []
         for (emoji, name, qty) in rows[:25]:
+            # 투자 종목 아이템 숨김
+            try:
+                if db.is_instrument_item_name(name):
+                    continue
+            except Exception:
+                pass
             label = f"{emoji} {name} × {qty}"
             value = json.dumps({"e": emoji, "n": name}, ensure_ascii=False)
             choices.append(app_commands.Choice(name=label, value=value))
@@ -201,6 +221,12 @@ class Inventory(commands.Cog):
         rows = db.list_inventory(user_id, query=current or None)
         choices = []
         for (emoji, name, qty) in rows[:25]:
+            # 투자 종목 아이템 숨김
+            try:
+                if db.is_instrument_item_name(name):
+                    continue
+            except Exception:
+                pass
             label = f"{emoji} {name} × {qty}"
             value = json.dumps({"e": emoji, "n": name}, ensure_ascii=False)
             choices.append(app_commands.Choice(name=label, value=value))

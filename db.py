@@ -556,6 +556,14 @@ def instrument_item(symbol: str) -> tuple[str, str]:
     return INSTRUMENT_ITEM_MAP[symbol]
 
 
+def instrument_item_names() -> set[str]:
+    return {name for (_sym, (_emo, name)) in INSTRUMENT_ITEM_MAP.items()}
+
+
+def is_instrument_item_name(name: str) -> bool:
+    return name in instrument_item_names()
+
+
 def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:
     date_kst = _today_kst(ts)
     if symbol == "ETF_CHAT":

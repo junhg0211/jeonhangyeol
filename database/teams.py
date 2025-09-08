@@ -239,3 +239,105 @@ __all__ = [
     'count_team_members','count_team_subtree_members',
     'get_user_team_id','get_team_path_names','set_rank_roles','get_rank_roles',
 ]
+
+# ---------------- Inventory-based team API (new preferred implementation) ----------------
+
+TEAM_ITEM_EMOJI = "👥"
+
+def _normalize_path(path: str) -> str:
+    tokens = [t for t in (path or "").split() if t]
+    if not tokens:
+        raise ValueError("팀 경로가 비어 있습니다.")
+    return " ".join(tokens)
+
+
+def _team_item_name(guild_id: int, path: str) -> str:
+    return f"TEAM:{int(guild_id)}:{_normalize_path(path)}"
+
+
+def inv_team_get_user_path(guild_id: int, user_id: int) -> str | None:
+    prefix = f"TEAM:{int(guild_id)}:"
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT i.name FROM items AS i
+            JOIN inventory AS inv ON inv.item_id=i.id
+            WHERE inv.user_id=? AND i.name LIKE ?
+            LIMIT 1
+            """,
+            (user_id, prefix + "%"),
+        ).fetchone()
+        if not row:
+            return None
+        name = str(row[0])
+        parts = name.split(":", 2)
+        return parts[2] if len(parts) >= 3 else None
+
+
+def inv_team_clear_user(guild_id: int, user_id: int) -> None:
+    prefix = f"TEAM:{int(guild_id)}:"
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT i.id FROM items AS i
+            JOIN inventory AS inv ON inv.item_id=i.id
+            WHERE inv.user_id=? AND i.name LIKE ?
+            """,
+            (user_id, prefix + "%"),
+        ).fetchall()
+        if rows:
+            ids = [int(r[0]) for r in rows]
+            q = ",".join(["?"] * len(ids))
+            conn.execute(f"DELETE FROM inventory WHERE user_id=? AND item_id IN ({q})", (user_id, *ids))
+
+
+def inv_team_set_user_path(guild_id: int, user_id: int, path: str) -> None:
+    name = _team_item_name(guild_id, path)
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # clear existing for this guild
+        rows = conn.execute(
+            "SELECT id FROM items WHERE name LIKE ?",
+            (f"TEAM:{int(guild_id)}:%",),
+        ).fetchall()
+        if rows:
+            ids = [int(r[0]) for r in rows]
+            q = ",".join(["?"] * len(ids))
+            conn.execute(f"DELETE FROM inventory WHERE user_id=? AND item_id IN ({q})", (user_id, *ids))
+        # ensure item
+        cur = conn.execute("SELECT id FROM items WHERE name=? AND emoji=?", (name, TEAM_ITEM_EMOJI))
+        row = cur.fetchone()
+        item_id = int(row[0]) if row else int(conn.execute("INSERT INTO items(name, emoji) VALUES(?, ?)", (name, TEAM_ITEM_EMOJI)).lastrowid)
+        conn.execute(
+            """
+            INSERT INTO inventory(user_id, item_id, qty) VALUES(?, ?, 1)
+            ON CONFLICT(user_id, item_id) DO UPDATE SET qty=1
+            """,
+            (user_id, item_id),
+        )
+
+
+def inv_team_list_members(guild_id: int, path: str) -> list[int]:
+    name = _team_item_name(guild_id, path)
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM items WHERE name=? AND emoji=?", (name, TEAM_ITEM_EMOJI)).fetchone()
+        if not row:
+            return []
+        item_id = int(row[0])
+        cur = conn.execute("SELECT user_id FROM inventory WHERE item_id=? ORDER BY user_id ASC", (item_id,))
+        return [int(u) for (u,) in cur.fetchall()]
+
+
+def inv_team_all_user_paths(guild_id: int) -> dict[int, str]:
+    res: dict[int, str] = {}
+    prefix = f"TEAM:{int(guild_id)}:"
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT inv.user_id, i.name FROM inventory AS inv JOIN items AS i ON i.id=inv.item_id WHERE i.name LIKE ?",
+            (prefix + "%",),
+        )
+        for uid, nm in cur.fetchall():
+            parts = str(nm).split(":", 2)
+            if len(parts) >= 3:
+                res[int(uid)] = parts[2]
+    return res

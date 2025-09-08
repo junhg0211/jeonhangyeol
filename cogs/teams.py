@@ -44,8 +44,8 @@ class Teams(commands.Cog):
         return False
 
     def _build_team_suffix(self, guild: discord.Guild, user_id: int, budget: int, rank: str | None) -> str:
-        team_id = db.get_user_team_id(guild.id, user_id)
-        names = db.get_team_path_names(guild.id, team_id) if team_id else []
+        path = db.inv_team_get_user_path(guild.id, user_id)
+        names = ([t for t in path.split() if t] if path else [])
         # 가장 하위 팀부터 거꾸로 누적, 길이 초과 시 상위는 생략
         suffix_tokens: list[str] = []
         # rank는 항상 맨 끝에 붙음
@@ -125,22 +125,14 @@ class Teams(commands.Cog):
         except Exception:
             pass
         try:
-            team_id = db.ensure_team_path(interaction.guild.id, 경로)
-            db.set_user_team(interaction.guild.id, 대상.id, team_id)
+            db.inv_team_set_user_path(interaction.guild.id, 대상.id, 경로)
         except ValueError as e:
             await interaction.response.send_message(str(e), ephemeral=True)
             return
         # 닉네임 반영 시도
         changed = await self._apply_member_nick(대상)
         note = " (닉네임 반영됨)" if changed else ""
-        # 비는 팀 정리(이전 팀부터 위로 올라가며 비어 있으면 삭제)
-        pruned = 0
-        try:
-            pruned = db.prune_empty_upwards(interaction.guild.id, prev_team_id)
-        except Exception:
-            pass
-        extra = f" — 빈 팀 {pruned}개 삭제" if pruned > 0 else ""
-        await interaction.response.send_message(f"{대상.mention}님의 팀이 '{경로}'로 변경되었습니다.{note}{extra}", ephemeral=True)
+        await interaction.response.send_message(f"{대상.mention}님의 팀이 '{경로}'로 변경되었습니다.{note}", ephemeral=True)
 
 
     @group.command(name="목록", description="팀별 인원 목록을 표시합니다.")
@@ -148,89 +140,59 @@ class Teams(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
             return
-        rows = db.list_teams(interaction.guild.id)
-        if not rows:
+        # Inventory-based: build from user paths
+        uid_to_path = db.inv_team_all_user_paths(interaction.guild.id)
+        if not uid_to_path:
             await interaction.response.send_message("등록된 팀이 없습니다.", ephemeral=True)
             return
-        # Build tree
-        by_parent = {}
-        for tid, name, parent in rows:
-            by_parent.setdefault(parent, []).append((tid, name))
-        # root id
-        root_id = None
-        for tid, name, parent in rows:
-            if parent is None and name == db.TEAM_ROOT_NAME:
-                root_id = tid
-                break
+        # Build map: path -> [user_ids]
+        path_members: dict[str, list[int]] = {}
+        for uid, path in uid_to_path.items():
+            path_members.setdefault(path, []).append(uid)
+        # Build set of all node paths (prefixes)
+        all_nodes: set[str] = set()
+        for path in path_members.keys():
+            tokens = path.split()
+            for i in range(1, len(tokens) + 1):
+                all_nodes.add(" ".join(tokens[:i]))
+        # Compute subtree totals quickly
+        def subtree_total(prefix: str) -> int:
+            return sum(len(members) for p, members in path_members.items() if p == prefix or p.startswith(prefix + " "))
 
-        lines = []
-        def dfs(tid: int, name: str, depth: int):
-            if name != db.TEAM_ROOT_NAME:
-                members = db.list_team_members(interaction.guild.id, tid)
-                total_cnt = db.count_team_subtree_members(interaction.guild.id, tid)
-                member_names = []
-                for uid in members:
-                    m = interaction.guild.get_member(uid)
-                    if m:
-                        try:
-                            base = self._extract_base_name(m.display_name)
-                        except Exception:
-                            base = m.display_name
-                        member_names.append(base)
-                indent = "  " * depth
-                if member_names:
-                    lines.append(f"{indent}• {name} — 총 {total_cnt}명: {', '.join(member_names)}")
-                else:
-                    lines.append(f"{indent}• {name} — 총 {total_cnt}명")
-            for child_id, child_name in by_parent.get(tid, []):
-                dfs(child_id, child_name, depth + (0 if name == db.TEAM_ROOT_NAME else 1))
+        # Order nodes by depth then lexicographically
+        def depth_of(p: str) -> int:
+            return 0 if p == db.TEAM_ROOT_NAME else len(p.split())
+        ordered = sorted(all_nodes, key=lambda p: (len(p.split()), p))
 
-        if root_id is not None:
-            dfs(root_id, db.TEAM_ROOT_NAME, 0)
-        else:
-            # no explicit root, show all
-            for tid, name in by_parent.get(None, []):
-                dfs(tid, name, 0)
+        lines: list[str] = []
+        for node in ordered:
+            name = node.split()[-1]
+            depth = len(node.split()) - 1
+            # direct members list
+            member_names: list[str] = []
+            for uid in path_members.get(node, []):
+                m = interaction.guild.get_member(uid)
+                if not m:
+                    continue
+                try:
+                    base = self._extract_base_name(m.display_name)
+                except Exception:
+                    base = m.display_name
+                member_names.append(base)
+            total_cnt = subtree_total(node)
+            indent = "  " * depth
+            if member_names:
+                lines.append(f"{indent}• {name} — 총 {total_cnt}명: {', '.join(member_names)}")
+            else:
+                lines.append(f"{indent}• {name} — 총 {total_cnt}명")
 
         embed = discord.Embed(title="👥 팀 목록", description="\n".join(lines) if lines else "(표시할 팀이 없습니다)", color=discord.Color.purple())
         await interaction.response.send_message(embed=embed)
 
-    @group.command(name="정리", description="사람이 한 명도 없는 팀(하위 포함)을 일괄 삭제합니다.")
+    @group.command(name="정리", description="인벤토리 기반에서는 삭제할 팀 기록이 없습니다.")
     @app_commands.default_permissions(manage_guild=True)
     async def prune_empty(self, interaction: discord.Interaction):
-        if not interaction.guild:
-            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
-            return
-        # 깊은 팀부터 검사하며 비어 있으면 삭제
-        rows = db.list_teams(interaction.guild.id)
-        if not rows:
-            await interaction.response.send_message("등록된 팀이 없습니다.", ephemeral=True)
-            return
-        # build parent map and order by depth desc
-        parents = {}
-        for tid, name, parent in rows:
-            parents[tid] = parent
-        # compute depth from root
-        depth = {}
-        for tid, name, parent in rows:
-            d = 0
-            p = parent
-            while p is not None:
-                d += 1
-                p = parents.get(p)
-            depth[tid] = d
-        deleted = 0
-        # skip root by name
-        for tid, name, parent in sorted(rows, key=lambda r: depth.get(r[0], 0), reverse=True):
-            if name == db.TEAM_ROOT_NAME:
-                continue
-            try:
-                # 실제 길드에 존재하는 멤버 기준으로 비었는지 확인
-                if not self._subtree_has_active_members(interaction.guild, tid, by_parent):
-                    deleted += db.delete_team_subtree(interaction.guild.id, tid)
-            except Exception:
-                pass
-        await interaction.response.send_message(f"정리 완료: 삭제된 팀 {deleted}개", ephemeral=True)
+        await interaction.response.send_message("인벤토리 기반 모드에서는 팀 레코드가 없어 정리할 항목이 없습니다.", ephemeral=True)
 
     @group.command(name="닉네임적용", description="팀/직급 정보를 닉네임에 반영합니다.")
     @app_commands.describe(대상="미지정 시 본인")
@@ -318,12 +280,12 @@ class Teams(commands.Cog):
         if not is_self and not (perms and (perms.manage_guild or perms.administrator)):
             await interaction.response.send_message("다른 사용자의 팀 나가기는 관리자만 가능합니다.", ephemeral=True)
             return
-        prev_team_id = db.get_user_team_id(interaction.guild.id, member.id)
-        if prev_team_id is None:
+        prev_path = db.inv_team_get_user_path(interaction.guild.id, member.id)
+        if prev_path is None:
             await interaction.response.send_message("이미 팀에 소속되어 있지 않습니다.", ephemeral=True)
             return
         # 팀 소속 해제
-        db.clear_user_team(interaction.guild.id, member.id)
+        db.inv_team_clear_user(interaction.guild.id, member.id)
         # 닉네임 원복(접미사 제거)
         try:
             # 강제로 base만 남기기 위해 접미사가 없는 형태로 변경
@@ -334,14 +296,8 @@ class Teams(commands.Cog):
         except Exception:
             pass
         # 빈 팀 정리
-        pruned = 0
-        try:
-            pruned = db.prune_empty_upwards(interaction.guild.id, prev_team_id)
-        except Exception:
-            pass
-        extra = f" — 빈 팀 {pruned}개 삭제" if pruned > 0 else ""
         target_note = f" {member.mention}" if not is_self else ""
-        await interaction.response.send_message(f"팀 소속을 해제했습니다.{target_note}{extra}", ephemeral=True)
+        await interaction.response.send_message(f"팀 소속을 해제했습니다.{target_note}", ephemeral=True)
 
     # 역할 변경 시 닉네임 자동 반영
     @commands.Cog.listener()

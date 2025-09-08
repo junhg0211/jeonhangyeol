@@ -30,6 +30,29 @@ def init_db():
             );
             """
         )
+        # 특허 미니게임: 특허 및 참가자
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patent_participants (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                owner_id INTEGER NOT NULL,
+                word TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                created_ts INTEGER NOT NULL,
+                UNIQUE (guild_id, word)
+            );
+            """
+        )
         # ETF 분봉 기록
         conn.execute(
             """
@@ -562,6 +585,118 @@ def instrument_item_names() -> set[str]:
 
 def is_instrument_item_name(name: str) -> bool:
     return name in instrument_item_names()
+
+
+# ----------------------
+# Patent game APIs
+# ----------------------
+import re as _re
+
+
+def patent_min_price(word: str) -> int:
+    w = (word or "").strip()
+    n = len(w)
+    if n <= 2:
+        return 5000
+    if n == 3:
+        return 3000
+    if n == 4:
+        return 1500
+    if n == 5:
+        return 800
+    return 400
+
+
+def join_patent_game(guild_id: int, user_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO patent_participants(guild_id, user_id) VALUES(?, ?)",
+            (guild_id, user_id),
+        )
+
+
+def leave_patent_game(guild_id: int, user_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM patent_participants WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id),
+        )
+
+
+def is_patent_participant(guild_id: int, user_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT 1 FROM patent_participants WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id),
+        )
+        return cur.fetchone() is not None
+
+
+def add_patent(guild_id: int, owner_id: int, word: str, price: int) -> int:
+    w = (word or "").strip()
+    if not w:
+        raise ValueError("단어가 비어 있습니다.")
+    if price < patent_min_price(w):
+        raise ValueError("가격이 최소 요구 금액보다 낮습니다.")
+    now = int(_time.time())
+    key = w.casefold()
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO patents(guild_id, owner_id, word, price, created_ts) VALUES(?, ?, ?, ?, ?)",
+                (guild_id, owner_id, key, int(price), now),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("이미 출원된 단어입니다.")
+        return int(cur.lastrowid)
+
+
+def cancel_patent(guild_id: int, owner_id: int, word: str) -> bool:
+    key = (word or "").strip().casefold()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM patents WHERE guild_id=? AND owner_id=? AND word=?",
+            (guild_id, owner_id, key),
+        )
+        return cur.rowcount > 0
+
+
+def list_patents(guild_id: int):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT owner_id, word, price FROM patents WHERE guild_id=? ORDER BY LENGTH(word) ASC, price DESC",
+            (guild_id,),
+        )
+        return [(int(oid), str(w), int(p)) for (oid, w, p) in cur.fetchall()]
+
+
+def find_patent_hits(guild_id: int, content: str):
+    """Return list of (word, owner_id, price) present in content (case-insensitive). Unique by word."""
+    text = (content or "").casefold()
+    if not text:
+        return []
+    with get_conn() as conn:
+        cur = conn.execute("SELECT owner_id, word, price FROM patents WHERE guild_id=?", (guild_id,))
+        hits = []
+        seen = set()
+        for oid, w, p in cur.fetchall():
+            if w in seen:
+                continue
+            if w and w in text:
+                seen.add(w)
+                hits.append((w, int(oid), int(p)))
+        return hits
+
+
+def censor_words(content: str, words: list[str]) -> str:
+    s = content
+    for w in sorted(set(words), key=len, reverse=True):
+        try:
+            pat = _re.compile(_re.escape(w), _re.IGNORECASE)
+            s = pat.sub("■" * len(w), s)
+        except Exception:
+            pass
+    return s
 
 
 def get_symbol_price(guild_id: int, symbol: str, ts: int | None = None) -> float:

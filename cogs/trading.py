@@ -44,6 +44,11 @@ class Trading(commands.Cog):
 
     async def _quote_embed(self, guild_id: int) -> discord.Embed:
         date = datetime.now(KST).strftime("%Y-%m-%d")
+        # Ensure today's indices exist so 시세가 "없음"으로 뜨지 않도록 초기화
+        try:
+            db.ensure_indices_for_day(guild_id, date)
+        except Exception:
+            pass
         rows = []
         for sym, name in SYMBOLS:
             try:

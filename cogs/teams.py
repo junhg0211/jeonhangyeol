@@ -122,7 +122,15 @@ class Teams(commands.Cog):
             await interaction.response.send_message("해당 경로의 팀이 존재하지 않습니다.", ephemeral=True)
             return
         cleared = db.clear_membership_subtree(interaction.guild.id, team_id)
-        await interaction.response.send_message(f"삭제 완료: 소속 해제 {cleared}명 (팀 '{path_norm}' 및 하위)", ephemeral=True)
+        # 팀/하위 팀에 더 이상 인원이 없다면 팀 노드도 삭제
+        removed = 0
+        try:
+            if not db.team_subtree_has_members(interaction.guild.id, team_id):
+                removed = db.delete_team_subtree(interaction.guild.id, team_id)
+        except Exception:
+            pass
+        extra = f", 팀 노드 {removed}개 삭제" if removed > 0 else ""
+        await interaction.response.send_message(f"삭제 완료: 소속 해제 {cleared}명 (팀 '{path_norm}' 및 하위){extra}", ephemeral=True)
 
     # (직급 관련 명령 제거)
 

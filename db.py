@@ -569,6 +569,92 @@ def finalize_due_auctions(max_to_close: int = 50) -> int:
     return closed
 
 
+def finalize_due_auctions_details(max_to_close: int = 50):
+    """Finalize due auctions and return detailed results for notifications.
+
+    Returns a list of dicts with keys:
+      - id, guild_id, seller_id, name, emoji, qty,
+      - status: 'sold' | 'unsold_return',
+      - winner_id (optional), winning_bid (optional)
+    """
+    now = int(_time.time())
+    results: list[dict] = []
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, guild_id, seller_id, name, emoji, qty, current_bid, current_bidder_id FROM auctions WHERE status='open' AND end_at <= ? LIMIT ?",
+            (now, max_to_close),
+        )
+        rows = cur.fetchall()
+        for (aid, gid, seller_id, name, emoji, qty, current_bid, current_bidder_id) in rows:
+            conn.execute("BEGIN IMMEDIATE")
+            cur2 = conn.execute(
+                "SELECT status, current_bid, current_bidder_id FROM auctions WHERE id=?",
+                (aid,),
+            )
+            st, cb, cbid = cur2.fetchone()
+            if st != 'open':
+                continue
+            if cbid is None or cb is None:
+                # unsold: return to seller
+                conn.execute(
+                    """
+                    INSERT INTO inventory(user_id, item_id, qty)
+                    SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
+                    ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
+                    """,
+                    (seller_id, qty, name, emoji),
+                )
+                conn.execute(
+                    "UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?",
+                    (aid,),
+                )
+                results.append({
+                    'id': int(aid),
+                    'guild_id': int(gid) if gid is not None else None,
+                    'seller_id': int(seller_id),
+                    'name': str(name),
+                    'emoji': str(emoji),
+                    'qty': int(qty),
+                    'status': 'unsold_return',
+                })
+                continue
+            # sold case
+            conn.execute(
+                """
+                INSERT INTO inventory(user_id, item_id, qty)
+                SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
+                ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
+                """,
+                (cbid, qty, name, emoji),
+            )
+            # pay seller
+            cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
+            row = cur3.fetchone()
+            seller_bal = int(row[0]) if row else DEFAULT_BALANCE
+            if row is None:
+                conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (seller_id, seller_bal))
+            conn.execute(
+                "UPDATE balances SET balance=? WHERE user_id=?",
+                (seller_bal + int(cb), seller_id),
+            )
+            conn.execute(
+                "UPDATE auctions SET status='closed', winner_id=?, winning_bid=? WHERE id=?",
+                (cbid, cb, aid),
+            )
+            results.append({
+                'id': int(aid),
+                'guild_id': int(gid) if gid is not None else None,
+                'seller_id': int(seller_id),
+                'name': str(name),
+                'emoji': str(emoji),
+                'qty': int(qty),
+                'status': 'sold',
+                'winner_id': int(cbid),
+                'winning_bid': int(cb),
+            })
+    return results
+
+
 # ----------------------
 # Inventory / Items APIs
 # ----------------------

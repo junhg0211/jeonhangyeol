@@ -302,6 +302,7 @@ class Auctions(commands.Cog):
             # 1) 서버에서 판매자가 없는 유찰 경매 파기
             due = db.list_due_unsold_auctions(50)
             discarded = 0
+            discarded_msgs = []
             for (aid, guild_id, seller_id, name, emoji, qty) in due:
                 guild = self.bot.get_guild(guild_id) if guild_id else None
                 seller_present = bool(guild and guild.get_member(seller_id))
@@ -309,13 +310,79 @@ class Auctions(commands.Cog):
                     try:
                         db.discard_unsold_auction(aid)
                         discarded += 1
+                        discarded_msgs.append({
+                            'id': aid,
+                            'guild_id': guild_id,
+                            'seller_id': seller_id,
+                            'name': name,
+                            'emoji': emoji,
+                            'qty': qty,
+                            'status': 'discarded',
+                        })
                     except Exception:
                         pass
 
             # 2) 나머지 경매 일반 규칙으로 정산(낙찰/유찰 반납)
-            closed = db.finalize_due_auctions(50)
-            if discarded or closed:
-                print(f"[auctions] finalized={closed} discarded={discarded}")
+            details = db.finalize_due_auctions_details(50)
+            if discarded or details:
+                print(f"[auctions] finalized={len(details)} discarded={discarded}")
+
+            # 3) 알림 채널로 로그 전송
+            notif_groups: dict[int, list[dict]] = {}
+            for d in discarded_msgs + details:
+                gid = d.get('guild_id')
+                if gid:
+                    notif_groups.setdefault(gid, []).append(d)
+            for gid, items in notif_groups.items():
+                ch_id = db.get_notify_channel(gid)
+                if not ch_id:
+                    continue
+                ch = self.bot.get_channel(ch_id)
+                if not isinstance(ch, (discord.TextChannel, discord.Thread)):
+                    continue
+                for d in items:
+                    try:
+                        if d['status'] == 'sold':
+                            winner_id = d.get('winner_id')
+                            price = d.get('winning_bid')
+                            embed = discord.Embed(
+                                title="🏁 경매 종료 — 낙찰",
+                                description=(
+                                    f"경매 ID: `{d['id']}`\n"
+                                    f"아이템: {d['emoji']} {d['name']} × **{d['qty']}**\n"
+                                    f"낙찰가: **{price:,}원**\n"
+                                    f"낙찰자: <@{winner_id}>"
+                                ),
+                                color=discord.Color.green(),
+                            )
+                            embed.set_footer(text=f"판매자: <@{d['seller_id']}>")
+                            await ch.send(embed=embed)
+                        elif d['status'] == 'unsold_return':
+                            embed = discord.Embed(
+                                title="🏁 경매 종료 — 유찰(반환)",
+                                description=(
+                                    f"경매 ID: `{d['id']}`\n"
+                                    f"아이템: {d['emoji']} {d['name']} × **{d['qty']}**\n"
+                                    f"판매자 인벤토리로 반환되었습니다."
+                                ),
+                                color=discord.Color.orange(),
+                            )
+                            embed.set_footer(text=f"판매자: <@{d['seller_id']}>")
+                            await ch.send(embed=embed)
+                        elif d['status'] == 'discarded':
+                            embed = discord.Embed(
+                                title="🏁 경매 종료 — 유찰(판매자 없음, 파기)",
+                                description=(
+                                    f"경매 ID: `{d['id']}`\n"
+                                    f"아이템: {d['emoji']} {d['name']} × **{d['qty']}**\n"
+                                    f"판매자가 서버에 없어 아이템이 파기되었습니다."
+                                ),
+                                color=discord.Color.red(),
+                            )
+                            await ch.send(embed=embed)
+                    except Exception:
+                        # Ignore per-message failures to avoid stopping loop
+                        pass
         except Exception as e:
             print(f"[auctions] closer error: {e}")
 

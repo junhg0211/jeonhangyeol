@@ -13,8 +13,7 @@ class Auctions(commands.Cog):
         self.bot = bot
         db.init_db()
         self._pages: dict[int, dict] = {}
-        # background closer
-        self.closer.start()
+        # background closer will start on_ready to avoid startup errors before login
 
     def cog_unload(self):
         try:
@@ -322,7 +321,21 @@ class Auctions(commands.Cog):
 
     @closer.before_loop
     async def before_closer(self):
-        await self.bot.wait_until_ready()
+        # If started from on_ready, bot should already be ready; extra guard
+        if not self.bot.is_ready():
+            await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Start loop only after bot is ready (avoids RuntimeError before login)
+        if not self.closer.is_running():
+            try:
+                self.closer.start()
+            except RuntimeError:
+                # In rare cases, discord.py may still be initialising; try once later
+                await asyncio.sleep(1)
+                if not self.closer.is_running():
+                    self.closer.start()
 
 
 async def setup(bot: commands.Bot):

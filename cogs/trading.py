@@ -300,7 +300,7 @@ class Trading(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         if 단위 not in ("분", "시간", "일", "주"):
-            await interaction.response.send_message("단위는 분/시간/일/주 중 하나여야 합니다.", ephemeral=True)
+            await interaction.followup.send("단위는 분/시간/일/주 중 하나여야 합니다.", ephemeral=True)
             return
         count = max(5, min(int(길이), 240))
         # choose window
@@ -319,19 +319,19 @@ class Trading(commands.Cog):
         else:
             rows = []
         if not rows:
-            await interaction.response.send_message("차트 데이터가 부족합니다.", ephemeral=True)
+            await interaction.followup.send("차트 데이터가 부족합니다.", ephemeral=True)
             return
         candles = self._aggregate_candles(rows, 단위, count)
         if len(candles) < 2:
-            await interaction.response.send_message("차트 데이터가 부족합니다.", ephemeral=True)
+            await interaction.followup.send("차트 데이터가 부족합니다.", ephemeral=True)
             return
         if plt is None:
-            await interaction.response.send_message("서버에 matplotlib가 설치되어 있지 않아 차트를 렌더링할 수 없습니다.", ephemeral=True)
+            await interaction.followup.send("서버에 matplotlib가 설치되어 있지 않아 차트를 렌더링할 수 없습니다.", ephemeral=True)
             return
         # 렌더링은 별도 스레드에서 처리하여 이벤트 루프 블로킹 방지
         path = await asyncio.to_thread(self._render_candles, 종목, candles, 단위)
         if not path:
-            await interaction.response.send_message("차트 생성에 실패했습니다.", ephemeral=True)
+            await interaction.followup.send("차트 생성에 실패했습니다.", ephemeral=True)
             return
         file = discord.File(path, filename=f"{종목}_{단위}.png")
         embed = discord.Embed(title=f"{종목} {단위} 차트", color=discord.Color.teal())

@@ -67,6 +67,31 @@ def list_team_members(guild_id: int, team_id: int):
         return [int(u) for (u,) in cur.fetchall()]
 
 
+def count_team_members(guild_id: int, team_id: int) -> int:
+    """Count direct members assigned to a given team."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM user_teams WHERE guild_id=? AND team_id=?", (guild_id, team_id)).fetchone()
+        return int(row[0]) if row else 0
+
+
+def count_team_subtree_members(guild_id: int, team_id: int) -> int:
+    """Count members in the team including all descendant teams."""
+    with get_conn() as conn:
+        to_visit = [int(team_id)]
+        ids: list[int] = []
+        while to_visit:
+            cur_id = to_visit.pop()
+            ids.append(cur_id)
+            rows = conn.execute("SELECT id FROM teams WHERE guild_id=? AND parent_id=?", (guild_id, cur_id)).fetchall()
+            to_visit.extend(int(r[0]) for r in rows)
+        qmarks = ",".join(["?"] * len(ids))
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM user_teams WHERE guild_id=? AND team_id IN ({qmarks})",
+            (guild_id, *ids),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+
 def get_team_parent(guild_id: int, team_id: int) -> int | None:
     with get_conn() as conn:
         row = conn.execute("SELECT parent_id FROM teams WHERE guild_id=? AND id=?", (guild_id, team_id)).fetchone()
@@ -211,5 +236,6 @@ def get_rank_roles(guild_id: int) -> list[str]:
 __all__ = [
     'TEAM_ROOT_NAME',
     'ensure_team_path','set_user_team','clear_user_team','list_teams','list_team_members',
+    'count_team_members','count_team_subtree_members',
     'get_user_team_id','get_team_path_names','set_rank_roles','get_rank_roles',
 ]

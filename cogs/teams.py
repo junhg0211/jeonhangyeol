@@ -152,6 +152,7 @@ class Teams(commands.Cog):
         def dfs(tid: int, name: str, depth: int):
             if name != db.TEAM_ROOT_NAME:
                 members = db.list_team_members(interaction.guild.id, tid)
+                total_cnt = db.count_team_subtree_members(interaction.guild.id, tid)
                 member_names = []
                 for uid in members:
                     m = interaction.guild.get_member(uid)
@@ -159,9 +160,9 @@ class Teams(commands.Cog):
                         member_names.append(m.display_name)
                 indent = "  " * depth
                 if member_names:
-                    lines.append(f"{indent}• {name} — {len(member_names)}명: {', '.join(member_names)}")
+                    lines.append(f"{indent}• {name} — 총 {total_cnt}명 (자체 {len(member_names)}명): {', '.join(member_names)}")
                 else:
-                    lines.append(f"{indent}• {name} — 0명")
+                    lines.append(f"{indent}• {name} — 총 {total_cnt}명")
             for child_id, child_name in by_parent.get(tid, []):
                 dfs(child_id, child_name, depth + (0 if name == db.TEAM_ROOT_NAME else 1))
 

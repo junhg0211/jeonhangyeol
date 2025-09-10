@@ -161,3 +161,87 @@ __all__ = [
     'is_instrument_item_name',
     'is_patent_item_name',
 ]
+
+
+def list_items_for_users(user_ids: List[int]) -> List[Tuple[str, str, int, int]]:
+    """Aggregate items held by the given users.
+
+    Returns list of (emoji, name, total_qty, holders_count), ordered by total_qty desc, name asc.
+    """
+    if not user_ids:
+        return []
+    res: list[tuple[str, str, int, int]] = []
+    # SQLite has a limit on variables (~999); chunk the IN list
+    chunk = 800
+    parts: list[tuple[str, str, int, int]] = []
+    with get_conn() as conn:
+        for i in range(0, len(user_ids), chunk):
+            ids = [int(x) for x in user_ids[i:i+chunk]]
+            q = ",".join(["?"] * len(ids))
+            cur = conn.execute(
+                f"""
+                SELECT i.emoji, i.name, SUM(inv.qty) AS total_qty, COUNT(DISTINCT inv.user_id) AS holders
+                FROM inventory AS inv
+                JOIN items AS i ON i.id = inv.item_id
+                WHERE inv.user_id IN ({q})
+                GROUP BY i.emoji, i.name
+                """,
+                tuple(ids),
+            )
+            parts.extend([(str(e), str(n), int(t), int(h)) for (e, n, t, h) in cur.fetchall()])
+    # merge parts (same item may appear in different chunks)
+    agg: dict[tuple[str, str], tuple[int, set[int]]] = {}
+    # To reconstruct holders correctly, run a second pass to count distinct users per item.
+    # Simpler approach: query again per item for holders. But that's N queries. Instead, do a single join without chunking for holders when len<=999.
+    # For simplicity and performance balance, we will merge totals from parts and re-query holders if needed when chunks>1.
+    totals: dict[tuple[str, str], int] = {}
+    for e, n, t, h in parts:
+        key = (e, n)
+        totals[key] = totals.get(key, 0) + t
+    # Holders count approximate from parts is not accurate; recompute with a single pass when possible.
+    holders: dict[tuple[str, str], int] = {}
+    if len(user_ids) <= 999:
+        q = ",".join(["?"] * len(user_ids))
+        with get_conn() as conn:
+            cur = conn.execute(
+                f"""
+                SELECT i.emoji, i.name, COUNT(DISTINCT inv.user_id) AS holders
+                FROM inventory AS inv
+                JOIN items AS i ON i.id = inv.item_id
+                WHERE inv.user_id IN ({q})
+                GROUP BY i.emoji, i.name
+                """,
+                tuple(int(x) for x in user_ids),
+            )
+            for e, n, h in cur.fetchall():
+                holders[(str(e), str(n))] = int(h)
+    else:
+        # Fallback: approximate by summing distinct counts from chunks (may overcount if same user appears in multiple chunks, which doesn't happen).
+        # Since chunks are disjoint, this is exact.
+        # We didn't collect per-item holders per chunk, so approximate holders = number of users that hold the item by re-running per item queries could be heavy.
+        # As a compromise, compute holders using an EXISTS subquery per item key.
+        keys = list(totals.keys())
+        with get_conn() as conn:
+            for (e, n) in keys:
+                cnt = 0
+                for i in range(0, len(user_ids), chunk):
+                    ids = [int(x) for x in user_ids[i:i+chunk]]
+                    q = ",".join(["?"] * len(ids))
+                    cur = conn.execute(
+                        f"""
+                        SELECT COUNT(DISTINCT inv.user_id)
+                        FROM inventory AS inv
+                        JOIN items AS it ON it.id=inv.item_id
+                        WHERE it.emoji=? AND it.name=? AND inv.user_id IN ({q})
+                        """,
+                        (e, n, *ids),
+                    )
+                    row = cur.fetchone()
+                    cnt += int(row[0]) if row else 0
+                holders[(e, n)] = cnt
+    for key, total in totals.items():
+        e, n = key
+        h = holders.get(key, 0)
+        res.append((e, n, total, h))
+    res.sort(key=lambda x: (-x[2], x[1]))
+    return res

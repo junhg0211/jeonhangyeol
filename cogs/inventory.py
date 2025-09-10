@@ -76,6 +76,44 @@ class Inventory(commands.Cog):
         # 타임아웃 스케줄링 (1분)
         asyncio.create_task(self._schedule_expire(msg))
 
+    # 서버 발급 아이템 목록: /아이템목록 [검색]
+    @app_commands.command(name="아이템목록", description="서버에 발급된 모든 아이템(합계)을 표시합니다.")
+    @app_commands.describe(검색="아이템 이름 또는 이모지 일부")
+    async def list_server_items(self, interaction: discord.Interaction, 검색: str | None = None):
+        if not interaction.guild:
+            await interaction.response.send_message("서버에서만 사용 가능합니다.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        member_ids = [m.id for m in interaction.guild.members if not m.bot]
+        rows = db.list_items_for_users(member_ids)
+        # 검색 필터(선택)
+        if 검색:
+            q = 검색.lower()
+            rows = [r for r in rows if q in r[1].lower() or q in (r[0] or "")]
+        per_page = 15
+        total = len(rows)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+
+        def page_embed(page: int) -> discord.Embed:
+            start = (page - 1) * per_page
+            end = start + per_page
+            page_rows = rows[start:end]
+            if not page_rows:
+                desc = "해당되는 아이템이 없습니다."
+            else:
+                lines = [f"{e} {n} — 총 **{t}개** • 보유자 **{h}명**" for (e, n, t, h) in page_rows]
+                desc = "\n".join(lines)
+            title = "🗂️ 서버 발급 아이템 목록"
+            if 검색:
+                title += f" — 검색: {검색}"
+            embed = discord.Embed(title=title, description=desc, color=discord.Color.green())
+            embed.set_footer(text=f"페이지 {page}/{total_pages}")
+            return embed
+
+        # 첫 페이지 전송
+        embed = page_embed(1)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # 2) 아이템 양도: /양도 받는사람 이모지 이름 [수량]
     @app_commands.command(name="양도", description="보유 아이템을 다른 사람에게 전달합니다.")
     @app_commands.describe(

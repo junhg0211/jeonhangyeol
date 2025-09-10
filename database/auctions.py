@@ -136,48 +136,60 @@ def finalize_due_auctions(max_to_close: int = 50) -> int:
         )
         rows = cur.fetchall()
         for (aid, gid, seller_id, name, emoji, qty, current_bid, current_bidder_id) in rows:
-            conn.execute("BEGIN IMMEDIATE")
-            cur2 = conn.execute("SELECT status, current_bid, current_bidder_id FROM auctions WHERE id=?", (aid,))
-            st, cb, cbid = cur2.fetchone()
-            if st != 'open':
-                continue
-            if cbid is None or cb is None:
+            conn.execute("SAVEPOINT fin_one")
+            try:
+                cur2 = conn.execute("SELECT status, current_bid, current_bidder_id FROM auctions WHERE id=?", (aid,))
+                row2 = cur2.fetchone()
+                if not row2:
+                    conn.execute("RELEASE fin_one")
+                    continue
+                st, cb, cbid = row2
+                if st != 'open':
+                    conn.execute("RELEASE fin_one")
+                    continue
+                if cbid is None or cb is None:
+                    conn.execute(
+                        """
+                        INSERT INTO inventory(user_id, item_id, qty)
+                        SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
+                        ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
+                        """,
+                        (seller_id, qty, name, emoji),
+                    )
+                    conn.execute("UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?", (aid,))
+                    closed += 1
+                    conn.execute("RELEASE fin_one")
+                    continue
+                # winner case
                 conn.execute(
                     """
                     INSERT INTO inventory(user_id, item_id, qty)
                     SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
                     ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
                     """,
-                    (seller_id, qty, name, emoji),
+                    (cbid, qty, name, emoji),
                 )
-                conn.execute("UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?", (aid,))
+                # patent ownership transfer
+                try:
+                    if str(emoji) == "📜" and str(name).startswith("특허:"):
+                        w = str(name).split(":", 1)[1]
+                        conn.execute("UPDATE patents SET owner_id=? WHERE guild_id=? AND word=?", (cbid, int(gid) if gid is not None else 0, w))
+                except Exception:
+                    pass
+                # pay seller
+                cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
+                rowb = cur3.fetchone()
+                seller_bal = int(rowb[0]) if rowb else DEFAULT_BALANCE
+                if rowb is None:
+                    conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (seller_id, seller_bal))
+                conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (seller_bal + int(cb), seller_id))
+                conn.execute("UPDATE auctions SET status='closed', winner_id=?, winning_bid=? WHERE id=?", (cbid, cb, aid))
                 closed += 1
-                continue
-            # winner case
-            conn.execute(
-                """
-                INSERT INTO inventory(user_id, item_id, qty)
-                SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
-                ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
-                """,
-                (cbid, qty, name, emoji),
-            )
-            # patent ownership transfer
-            try:
-                if str(emoji) == "📜" and str(name).startswith("특허:"):
-                    w = str(name).split(":", 1)[1]
-                    conn.execute("UPDATE patents SET owner_id=? WHERE guild_id=? AND word=?", (cbid, int(gid) if gid is not None else 0, w))
+                conn.execute("RELEASE fin_one")
             except Exception:
-                pass
-            # pay seller
-            cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
-            row = cur3.fetchone()
-            seller_bal = int(row[0]) if row else DEFAULT_BALANCE
-            if row is None:
-                conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (seller_id, seller_bal))
-            conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (seller_bal + int(cb), seller_id))
-            conn.execute("UPDATE auctions SET status='closed', winner_id=?, winning_bid=? WHERE id=?", (cbid, cb, aid))
-            closed += 1
+                conn.execute("ROLLBACK TO fin_one")
+                conn.execute("RELEASE fin_one")
+                continue
     return closed
 
 
@@ -187,44 +199,56 @@ def finalize_due_auctions_details(max_to_close: int = 50):
     with get_conn() as conn:
         cur = conn.execute("SELECT id, guild_id, seller_id, name, emoji, qty, current_bid, current_bidder_id FROM auctions WHERE status='open' AND end_at <= ? LIMIT ?", (now, max_to_close))
         for (aid, gid, seller_id, name, emoji, qty, current_bid, current_bidder_id) in cur.fetchall():
-            conn.execute("BEGIN IMMEDIATE")
-            st, cb, cbid = conn.execute("SELECT status, current_bid, current_bidder_id FROM auctions WHERE id=?", (aid,)).fetchone()
-            if st != 'open':
-                continue
-            if cbid is None or cb is None:
+            conn.execute("SAVEPOINT fin_det_one")
+            try:
+                row2 = conn.execute("SELECT status, current_bid, current_bidder_id FROM auctions WHERE id=?", (aid,)).fetchone()
+                if not row2:
+                    conn.execute("RELEASE fin_det_one")
+                    continue
+                st, cb, cbid = row2
+                if st != 'open':
+                    conn.execute("RELEASE fin_det_one")
+                    continue
+                if cbid is None or cb is None:
+                    conn.execute(
+                        """
+                        INSERT INTO inventory(user_id, item_id, qty)
+                        SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
+                        ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
+                        """,
+                        (seller_id, qty, name, emoji),
+                    )
+                    conn.execute("UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?", (aid,))
+                    results.append({'id': aid, 'guild_id': int(gid) if gid is not None else None, 'seller_id': seller_id, 'name': name, 'emoji': emoji, 'qty': qty, 'status': 'unsold_return'})
+                    conn.execute("RELEASE fin_det_one")
+                    continue
                 conn.execute(
                     """
                     INSERT INTO inventory(user_id, item_id, qty)
                     SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
                     ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
                     """,
-                    (seller_id, qty, name, emoji),
+                    (cbid, qty, name, emoji),
                 )
-                conn.execute("UPDATE auctions SET status='closed', winner_id=NULL, winning_bid=NULL WHERE id=?", (aid,))
-                results.append({'id': aid, 'guild_id': int(gid) if gid is not None else None, 'seller_id': seller_id, 'name': name, 'emoji': emoji, 'qty': qty, 'status': 'unsold_return'})
-                continue
-            conn.execute(
-                """
-                INSERT INTO inventory(user_id, item_id, qty)
-                SELECT ?, i.id, ? FROM items i WHERE i.name=? AND i.emoji=?
-                ON CONFLICT(user_id, item_id) DO UPDATE SET qty=qty+excluded.qty
-                """,
-                (cbid, qty, name, emoji),
-            )
-            try:
-                if str(emoji) == "📜" and str(name).startswith("특허:"):
-                    w = str(name).split(":", 1)[1]
-                    conn.execute("UPDATE patents SET owner_id=? WHERE guild_id=? AND word=?", (cbid, int(gid) if gid is not None else 0, w))
+                try:
+                    if str(emoji) == "📜" and str(name).startswith("특허:"):
+                        w = str(name).split(":", 1)[1]
+                        conn.execute("UPDATE patents SET owner_id=? WHERE guild_id=? AND word=?", (cbid, int(gid) if gid is not None else 0, w))
+                except Exception:
+                    pass
+                cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
+                rowb = cur3.fetchone()
+                seller_bal = int(rowb[0]) if rowb else DEFAULT_BALANCE
+                if rowb is None:
+                    conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (seller_id, seller_bal))
+                conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (seller_bal + int(cb), seller_id))
+                conn.execute("UPDATE auctions SET status='closed', winner_id=?, winning_bid=? WHERE id=?", (cbid, cb, aid))
+                results.append({'id': aid, 'guild_id': int(gid) if gid is not None else None, 'seller_id': seller_id, 'name': name, 'emoji': emoji, 'qty': qty, 'status': 'sold', 'winner_id': cbid, 'winning_bid': cb})
+                conn.execute("RELEASE fin_det_one")
             except Exception:
-                pass
-            cur3 = conn.execute("SELECT balance FROM balances WHERE user_id=?", (seller_id,))
-            row = cur3.fetchone()
-            seller_bal = int(row[0]) if row else DEFAULT_BALANCE
-            if row is None:
-                conn.execute("INSERT INTO balances(user_id, balance) VALUES(?, ?)", (seller_id, seller_bal))
-            conn.execute("UPDATE balances SET balance=? WHERE user_id=?", (seller_bal + int(cb), seller_id))
-            conn.execute("UPDATE auctions SET status='closed', winner_id=?, winning_bid=? WHERE id=?", (cbid, cb, aid))
-            results.append({'id': aid, 'guild_id': int(gid) if gid is not None else None, 'seller_id': seller_id, 'name': name, 'emoji': emoji, 'qty': qty, 'status': 'sold', 'winner_id': cbid, 'winning_bid': cb})
+                conn.execute("ROLLBACK TO fin_det_one")
+                conn.execute("RELEASE fin_det_one")
+                continue
     return results
 
 

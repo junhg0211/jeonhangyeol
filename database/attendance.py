@@ -65,3 +65,11 @@ def attendance_max_streak_leaderboard(guild_id: int, limit: int = 20):
         return [(int(uid), int(ms), int(td)) for (uid, ms, td) in cur.fetchall()]
 
 __all__ = ['attendance_check_in','attendance_today','attendance_max_streak_leaderboard']
+
+
+def attendance_yesterday_not_today(guild_id: int):
+    """Return user_ids who checked in yesterday but not today (i.e., last_date == yesterday)."""
+    yday = _yesterday_kst()
+    with get_conn() as conn:
+        cur = conn.execute("SELECT user_id FROM attendance WHERE guild_id=? AND last_date=?", (guild_id, yday))
+        return [int(u) for (u,) in cur.fetchall()]
